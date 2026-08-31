@@ -1,0 +1,6 @@
+# Userland services loaded at init (one service name per line).
+# '#' comments and blank lines are ignored. Each name resolves to
+# /Userland/Service/<name>/<name>.so and can be hot-unloaded at runtime
+# via service_unload() (see Userland/Service/service_client.h).
+com.ImplusOS.posix
+com.ImplusOS.netstack
