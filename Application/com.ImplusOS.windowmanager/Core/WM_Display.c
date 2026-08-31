@@ -1,7 +1,7 @@
 #include "WM_Display.h"
 
 #include "../Compositor/WM_Compositor.h"
-#include "../../../../Userland/Syscalls.h"
+#include "../../../../Userland/Source/Syscalls.h"
 
 #include <stdlib.h>
 #include <string.h>

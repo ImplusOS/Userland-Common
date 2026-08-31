@@ -10,8 +10,8 @@
 #include "../Theme/WM_Theme.h"
 #include "../UI/WM_Notification.h"
 #include "../UI/WM_Dialog.h"
-#include "../../../../Userland/API/XMLParser.h"
-#include "../../../../Userland/Syscalls.h"
+#include "../../../../Userland/API/Source/XMLParser.h"
+#include "../../../../Userland/Source/Syscalls.h"
 
 #include <stdlib.h>
 #include <string.h>

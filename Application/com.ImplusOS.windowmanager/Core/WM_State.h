@@ -5,11 +5,11 @@
 #include <stdint.h>
 #include <time.h>
 
-#include "../../../../Userland/API/IPC.h"
-#include "../../../../Userland/API/Input.h"
-#include "../../../../Userland/API/Graphics.h"
-#include "../../../../Userland/API/WM_Protocol.h"
-#include "../../../../Userland/API/WiFi.h"
+#include "../../../../Userland/API/Source/IPC.h"
+#include "../../../../Userland/API/Source/Input.h"
+#include "../../../../Userland/API/Source/Graphics.h"
+#include "../../../../Userland/API/Source/WM_Protocol.h"
+#include "../../../../Userland/API/Source/WiFi.h"
 
 #define WM_MAX_WINDOWS                 128u
 #define WM_MAX_INPUT_SUBSCRIPTIONS     32u

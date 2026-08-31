@@ -15,9 +15,9 @@
 #include "../UI/WM_StartMenu.h"
 #include "../UI/WM_Taskbar.h"
 #include "../UI/WM_WifiPanel.h"
-#include "../../../../Userland/Syscalls.h"
-#include "../../../../Userland/API/Process.h"
-#include "../../../../Userland/API/Time.h"
+#include "../../../../Userland/Source/Syscalls.h"
+#include "../../../../Userland/API/Source/Process.h"
+#include "../../../../Userland/API/Source/Time.h"
 
 #include <string.h>
 

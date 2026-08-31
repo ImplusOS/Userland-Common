@@ -2,8 +2,8 @@
 
 #include "../Animation/WM_Animation.h"
 #include "../Compositor/WM_Damage.h"
-#include "../../../../Userland/API/Memory.h"
-#include "../../../../Userland/API/Process.h"
+#include "../../../../Userland/API/Source/Memory.h"
+#include "../../../../Userland/API/Source/Process.h"
 
 #include <stdlib.h>
 #include <string.h>

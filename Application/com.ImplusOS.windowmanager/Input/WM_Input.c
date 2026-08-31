@@ -8,8 +8,8 @@
 #include "../UI/WM_Notification.h"
 #include "../UI/WM_Dialog.h"
 #include "../UI/WM_WifiPanel.h"
-#include "../../../../Userland/Syscalls.h"
-#include "../../../../Userland/API/Process.h"
+#include "../../../../Userland/Source/Syscalls.h"
+#include "../../../../Userland/API/Source/Process.h"
 
 #include <string.h>
 

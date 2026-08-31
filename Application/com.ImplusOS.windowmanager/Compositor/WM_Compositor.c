@@ -9,7 +9,7 @@
 #include "../UI/WM_StartMenu.h"
 #include "../UI/WM_Taskbar.h"
 #include "../UI/WM_WifiPanel.h"
-#include "../../../../Userland/Syscalls.h"
+#include "../../../../Userland/Source/Syscalls.h"
 
 #include <stdlib.h>
 #include <string.h>
