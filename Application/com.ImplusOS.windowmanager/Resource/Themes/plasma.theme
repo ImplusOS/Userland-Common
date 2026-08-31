@@ -1,0 +1,32 @@
+; ImplusOS Default
+[Colors]
+bg_top          = 0xFFFAFAFA
+bg_mid          = 0xFFF5F5F5
+bg_bottom       = 0xFFEEEEEE
+bg_glow         = 0xFFFFFFFF
+surface         = 0xFFFFFFFF
+surface_alt     = 0xFFF3F4F6
+surface_hover   = 0x18000000
+title_active    = 0xFFFFFFFF
+title_inactive  = 0xFFF8F9FA
+border          = 0x22000000
+border_focus    = 0xFF1C1B1F
+accent          = 0xFF1C1B1F
+accent_alt      = 0xFF49454F
+accent_soft     = 0x16000000
+text            = 0xFF1C1B1F
+text_dim        = 0xFF49454F
+danger          = 0xFFB3261E
+shadow          = 0x28000000
+dock            = 0xF8FFFFFF
+dock_border     = 0x18000000
+notification    = 0xF8FFFFFF
+
+[Dimensions]
+title_height    = 36
+corner_radius   = 12
+shadow_size     = 10
+dock_height     = 30
+font_normal     = 13.0
+font_small      = 11.0
+font_title      = 13.0

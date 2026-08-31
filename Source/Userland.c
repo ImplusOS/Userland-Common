@@ -14,7 +14,7 @@
 #include "../API/Source/Window.h"
 #include "../API/Source/Input.h"
 #include "../API/Source/SystemInfo.h"
-#include "Service/service_client.h"
+#include "../Service/Source/service_client.h"
 #include "Unicode/UTF8/UTF8.h"
 #include "Crypto/Crypto.h"
 #include <Identifier/Identifier.h>
