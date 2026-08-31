@@ -39,8 +39,6 @@ COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/math.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/stdio.o \
                $(COMMON_LIBS_DIR)/Service/service_client.o \
-               # NOTE: com.ImplusOS.netstack has not yet been split into its own
-               # repository; this object will fail to build until it is restored.
                $(COMMON_LIBS_DIR)/Service/com.ImplusOS.netstack/DNS/DNS.o \
                $(COMMON_LIBRARY_OBJS)
 
