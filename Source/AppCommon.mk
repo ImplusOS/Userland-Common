@@ -18,11 +18,11 @@ LD := $(CROSS_COMPILE)ld
 AR := $(CROSS_COMPILE)ar
 ARCH_CFLAGS := $(USERLAND_ARCH_CFLAGS)
 
-TOP_BUILD_DIR ?= ../../../Build/$(ARCH)
+TOP_BUILD_DIR ?= ../../Build/$(ARCH)
 COMMON_LIBS_DIR := $(TOP_BUILD_DIR)/Userland
 
-LIBRARY_SRCS := $(shell find ../../../Library -name "*.c" 2>/dev/null)
-COMMON_LIBRARY_OBJS := $(patsubst ../../../Library/%.c,$(TOP_BUILD_DIR)/Library/%.o,$(LIBRARY_SRCS))
+LIBRARY_SRCS := $(shell find ../../Library/Source -name "*.c" 2>/dev/null)
+COMMON_LIBRARY_OBJS := $(patsubst ../../Library/Source/%.c,$(TOP_BUILD_DIR)/Library/%.o,$(LIBRARY_SRCS))
 
 COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/string.o \
@@ -39,6 +39,8 @@ COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/math.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/stdio.o \
                $(COMMON_LIBS_DIR)/Service/service_client.o \
+               # NOTE: com.ImplusOS.netstack has not yet been split into its own
+               # repository; this object will fail to build until it is restored.
                $(COMMON_LIBS_DIR)/Service/com.ImplusOS.netstack/DNS/DNS.o \
                $(COMMON_LIBRARY_OBJS)
 
