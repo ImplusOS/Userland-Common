@@ -6,14 +6,14 @@
 #include <string.h>
 #include <time.h>
 
-#include "API/Process.h"
-#include "API/Serial.h"
-#include "API/Memory.h"
-#include "API/Graphics.h"
-#include "API/File.h"
-#include "API/Window.h"
-#include "API/Input.h"
-#include "API/SystemInfo.h"
+#include "../API/Source/Process.h"
+#include "../API/Source/Serial.h"
+#include "../API/Source/Memory.h"
+#include "../API/Source/Graphics.h"
+#include "../API/Source/File.h"
+#include "../API/Source/Window.h"
+#include "../API/Source/Input.h"
+#include "../API/Source/SystemInfo.h"
 #include "Service/service_client.h"
 #include "Unicode/UTF8/UTF8.h"
 #include "Crypto/Crypto.h"

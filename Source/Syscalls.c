@@ -5,19 +5,19 @@
 #include <errno.h>
 #include <sys/syscalls.h>
 #include "Syscalls.h"
-#include "API/File.h"
-#include "API/WM_Protocol.h"
-#include "API/Process.h"
-#include "API/IPC.h"
-#include "API/Graphics.h"
-#include "API/Input.h"
-#include "API/Window.h"
-#include "API/Serial.h"
-#include "API/SystemInfo.h"
-#include "API/Audio.h"
-#include "API/Socket.h"
-#include "API/PnP.h"
-#include "API/WiFi.h"
+#include "../API/Source/File.h"
+#include "../API/Source/WM_Protocol.h"
+#include "../API/Source/Process.h"
+#include "../API/Source/IPC.h"
+#include "../API/Source/Graphics.h"
+#include "../API/Source/Input.h"
+#include "../API/Source/Window.h"
+#include "../API/Source/Serial.h"
+#include "../API/Source/SystemInfo.h"
+#include "../API/Source/Audio.h"
+#include "../API/Source/Socket.h"
+#include "../API/Source/PnP.h"
+#include "../API/Source/WiFi.h"
 
 static uint32_t g_current_window_id = 0;
 static uint32_t g_wm_request_id = 0;
