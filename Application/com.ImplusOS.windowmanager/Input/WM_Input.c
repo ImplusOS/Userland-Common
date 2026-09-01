@@ -495,18 +495,6 @@ static bool handle_taskbar_click(wm_state_t *state)
             perform_wifi_action(state, (wm_wifi_action_t){WM_WIFI_ACTION_SCAN, 0u});
         }
         damage_ui(state);
-    } else if (hit.kind == WM_TASKBAR_HIT_PIN) {
-        if (hit.index < state->assets.app_count &&
-            state->assets.apps[hit.index].path[0]) {
-            process_spawn(state->assets.apps[hit.index].path);
-        }
-        state->launcher_open = false;
-        state->search_len = 0u;
-        state->search_text[0] = '\0';
-        state->search_active = false;
-        wm_notification_close_center(state);
-        close_wifi_panel(state);
-        damage_ui(state);
     } else if (hit.kind == WM_TASKBAR_HIT_AUDIO ||
                hit.kind == WM_TASKBAR_HIT_IME) {
         /* Audio + IME trays are stubs today. Close any open shell surface

@@ -1,212 +1,118 @@
 #include "WM_Icons.h"
 #include "../Compositor/WM_Raster.h"
+#include "../Core/WM_Assets.h"
 
-/* ---- fixed-point drawing on a 0..1000 grid mapped into `box` ---- */
+#include <stddef.h>
 
-static inline int32_t mapx(wm_rect_t b, int32_t n) { return b.x + (int32_t)((int64_t)n * (int32_t)b.w / 1000); }
-static inline int32_t mapy(wm_rect_t b, int32_t n) { return b.y + (int32_t)((int64_t)n * (int32_t)b.h / 1000); }
-static inline int32_t maps(wm_rect_t b, int32_t n) {
-    int32_t d = (int32_t)(b.w < b.h ? b.w : b.h);
-    int32_t v = (int32_t)((int64_t)n * d / 1000);
-    return v < 1 ? 1 : v;
-}
+/*
+ * Icons are external Material Design assets, pre-rendered to anti-aliased
+ * white RGBA PNGs by Tools/fetch_icons.sh into Resource/Icons/md/. They are
+ * loaded once and tinted at blit time (the source is white, so the tint is
+ * just the requested RGB with alpha = source_coverage * tint_alpha).
+ */
 
-static void nrect(wm_canvas_t *c, wm_rect_t b, int32_t x, int32_t y,
-                  int32_t w, int32_t h, int32_t rad, uint32_t col)
+#define ICON_DIR "/Userland/com.ImplusOS.windowmanager/Resource/Icons/md/"
+
+static const char *const k_icon_file[] = {
+    [WM_ICON_MENU]          = "menu",
+    [WM_ICON_APPS]          = "apps",
+    [WM_ICON_SEARCH]        = "search",
+    [WM_ICON_WIFI]          = "wifi",
+    [WM_ICON_WIFI_OFF]      = "wifi_off",
+    [WM_ICON_VOLUME]        = "volume_up",
+    [WM_ICON_VOLUME_MUTE]   = "volume_off",
+    [WM_ICON_IME]           = "keyboard",
+    [WM_ICON_NOTIFICATIONS] = "notifications",
+    [WM_ICON_SETTINGS]      = "settings",
+    [WM_ICON_POWER]         = "power_settings_new",
+    [WM_ICON_RESTART]       = "restart_alt",
+    [WM_ICON_FOLDER]        = "folder",
+    [WM_ICON_DOC]           = "description",
+    [WM_ICON_PERSON]        = "person",
+    [WM_ICON_CLOSE]         = "close",
+    [WM_ICON_MINIMIZE]      = "remove",
+    [WM_ICON_MAXIMIZE]      = "crop_square",
+    [WM_ICON_RESTORE]       = "filter_none",
+    [WM_ICON_CHEVRON_UP]    = "expand_less",
+    [WM_ICON_TERMINAL]      = "terminal",
+    [WM_ICON_EDIT]          = "edit",
+};
+#define ICON_COUNT ((int)(sizeof(k_icon_file) / sizeof(k_icon_file[0])))
+
+typedef struct { uint32_t *px; uint32_t w, h; int tried; } icon_cache_t;
+static icon_cache_t g_cache[ICON_COUNT];
+static icon_cache_t g_cursor;
+
+static const icon_cache_t *icon_get(wm_icon_kind_t kind)
 {
-    int32_t px = mapx(b, x), py = mapy(b, y);
-    int32_t pw = mapx(b, x + w) - px, ph = mapy(b, y + h) - py;
-    if (pw < 1) pw = 1;
-    if (ph < 1) ph = 1;
-    wm_rect_t r = {px, py, (uint32_t)pw, (uint32_t)ph};
-    if (rad > 0) wm_canvas_fill_rounded(c, r, (uint32_t)maps(b, rad), col);
-    else wm_canvas_fill(c, r, col);
-}
-
-static void ndisc(wm_canvas_t *c, wm_rect_t b, int32_t cx, int32_t cy,
-                  int32_t rr, uint32_t col)
-{
-    int32_t pcx = mapx(b, cx), pcy = mapy(b, cy), pr = maps(b, rr);
-    for (int32_t dy = -pr; dy <= pr; ++dy)
-        for (int32_t dx = -pr; dx <= pr; ++dx)
-            if (dx * dx + dy * dy <= pr * pr)
-                wm_canvas_put(c, pcx + dx, pcy + dy, col);
-}
-
-static void nring(wm_canvas_t *c, wm_rect_t b, int32_t cx, int32_t cy,
-                  int32_t rr, int32_t th, uint32_t col)
-{
-    int32_t pcx = mapx(b, cx), pcy = mapy(b, cy), pr = maps(b, rr), pt = maps(b, th);
-    int32_t inner = pr - pt; if (inner < 0) inner = 0;
-    for (int32_t dy = -pr; dy <= pr; ++dy)
-        for (int32_t dx = -pr; dx <= pr; ++dx) {
-            int32_t d2 = dx * dx + dy * dy;
-            if (d2 <= pr * pr && d2 >= inner * inner)
-                wm_canvas_put(c, pcx + dx, pcy + dy, col);
-        }
-}
-
-/* thick line via disc stamping */
-static void nline(wm_canvas_t *c, wm_rect_t b, int32_t x0, int32_t y0,
-                  int32_t x1, int32_t y1, int32_t th, uint32_t col)
-{
-    int32_t px0 = mapx(b, x0), py0 = mapy(b, y0);
-    int32_t px1 = mapx(b, x1), py1 = mapy(b, y1);
-    int32_t pt = maps(b, th) / 2; if (pt < 0) pt = 0;
-    int32_t dx = px1 - px0, dy = py1 - py0;
-    int32_t steps = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy)
-                    ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
-    if (steps == 0) steps = 1;
-    for (int32_t i = 0; i <= steps; ++i) {
-        int32_t x = px0 + dx * i / steps;
-        int32_t y = py0 + dy * i / steps;
-        for (int32_t oy = -pt; oy <= pt; ++oy)
-            for (int32_t ox = -pt; ox <= pt; ++ox)
-                if (ox * ox + oy * oy <= (pt + 1) * (pt + 1))
-                    wm_canvas_put(c, x + ox, y + oy, col);
+    if ((int)kind < 0 || (int)kind >= ICON_COUNT || !k_icon_file[kind]) return NULL;
+    icon_cache_t *c = &g_cache[kind];
+    if (!c->tried) {
+        c->tried = 1;
+        char path[160];
+        const char *dir = ICON_DIR;
+        char *p = path;
+        while (*dir) *p++ = *dir++;
+        const char *n = k_icon_file[kind];
+        while (*n) *p++ = *n++;
+        *p++ = '.'; *p++ = 'p'; *p++ = 'n'; *p++ = 'g'; *p = '\0';
+        c->px = wm_assets_load_png(path, &c->w, &c->h);
     }
+    return c->px ? c : NULL;
 }
 
-/* three stacked Wi-Fi arcs approximated by nested rings clipped to the top */
-static void wifi_arcs(wm_canvas_t *c, wm_rect_t b, uint32_t col, bool connected)
+/* bilinear sample of the source alpha channel; u_fp,v_fp are .16 in [0,65536) */
+static uint32_t sample_a(const icon_cache_t *ic, uint32_t u_fp, uint32_t v_fp)
 {
-    /* dot */
-    ndisc(c, b, 500, 760, 55, col);
-    int32_t radii[3] = {230, 380, 530};
-    int32_t n = connected ? 3 : 1;
-    for (int32_t k = 0; k < 3; ++k) {
-        uint32_t cc = (k < n) ? col : ((col & 0x00FFFFFFu) | 0x55000000u);
-        int32_t pcx = mapx(b, 500), pcy = mapy(b, 760), pr = maps(b, radii[k]);
-        int32_t pt = maps(b, 70);
-        for (int32_t dy = -pr; dy <= 0; ++dy)
-            for (int32_t dx = -pr; dx <= pr; ++dx) {
-                int32_t d2 = dx * dx + dy * dy;
-                if (d2 <= pr * pr && d2 >= (pr - pt) * (pr - pt))
-                    wm_canvas_put(c, pcx + dx, pcy + dy, cc);
-            }
+    uint32_t fx = (uint32_t)(((uint64_t)u_fp * (ic->w - 1u)) >> 0);   /* pixel .16 */
+    uint32_t fy = (uint32_t)(((uint64_t)v_fp * (ic->h - 1u)) >> 0);
+    uint32_t x0 = fx >> 16, y0 = fy >> 16;
+    uint32_t x1 = x0 + 1u < ic->w ? x0 + 1u : x0;
+    uint32_t y1 = y0 + 1u < ic->h ? y0 + 1u : y0;
+    uint32_t tx = (fx >> 8) & 0xFFu, ty = (fy >> 8) & 0xFFu;
+    uint32_t a00 = ic->px[y0 * ic->w + x0] >> 24;
+    uint32_t a10 = ic->px[y0 * ic->w + x1] >> 24;
+    uint32_t a01 = ic->px[y1 * ic->w + x0] >> 24;
+    uint32_t a11 = ic->px[y1 * ic->w + x1] >> 24;
+    uint32_t top = a00 * (256u - tx) + a10 * tx;
+    uint32_t bot = a01 * (256u - tx) + a11 * tx;
+    return (top * (256u - ty) + bot * ty) >> 16;
+}
+
+static void blit_tinted(wm_canvas_t *canvas, wm_rect_t box,
+                        const icon_cache_t *ic, uint32_t argb)
+{
+    if (!ic || box.w == 0u || box.h == 0u) return;
+    wm_rect_t vis = wm_rect_intersection(box, canvas->clip);
+    if (vis.w == 0u || vis.h == 0u) return;
+    uint32_t tint_rgb = argb & 0x00FFFFFFu;
+    uint32_t tint_a = (argb >> 24) ? (argb >> 24) : 255u;
+    uint32_t dnx = box.w > 1u ? box.w - 1u : 1u;
+    uint32_t dny = box.h > 1u ? box.h - 1u : 1u;
+    for (uint32_t ry = 0; ry < vis.h; ++ry) {
+        int32_t py = vis.y + (int32_t)ry;
+        uint32_t ly = (uint32_t)(py - box.y);
+        uint32_t v_fp = (ly << 16) / dny;
+        for (uint32_t rx = 0; rx < vis.w; ++rx) {
+            int32_t px = vis.x + (int32_t)rx;
+            uint32_t lx = (uint32_t)(px - box.x);
+            uint32_t u_fp = (lx << 16) / dnx;
+            uint32_t sa = sample_a(ic, u_fp, v_fp);
+            if (sa == 0u) continue;
+            uint32_t a = (sa * tint_a) / 255u;
+            if (a == 0u) continue;
+            wm_canvas_put(canvas, px, py, (a << 24) | tint_rgb);
+        }
     }
 }
 
 void wm_icon_draw(wm_canvas_t *canvas, wm_rect_t box,
                   wm_icon_kind_t kind, uint32_t argb)
 {
-    if (!canvas || box.w == 0u || box.h == 0u) return;
-    uint32_t col = argb | (argb >> 24 ? 0u : 0xFF000000u);
-
-    switch (kind) {
-    case WM_ICON_MENU:
-        nrect(canvas, box, 150, 270, 700, 90, 45, col);
-        nrect(canvas, box, 150, 455, 700, 90, 45, col);
-        nrect(canvas, box, 150, 640, 700, 90, 45, col);
-        break;
-    case WM_ICON_APPS:
-        for (int r = 0; r < 3; ++r)
-            for (int cc = 0; cc < 3; ++cc)
-                ndisc(canvas, box, 250 + cc * 250, 250 + r * 250, 95, col);
-        break;
-    case WM_ICON_SEARCH:
-        nring(canvas, box, 430, 430, 300, 90, col);
-        nline(canvas, box, 640, 640, 860, 860, 110, col);
-        break;
-    case WM_ICON_WIFI:      wifi_arcs(canvas, box, col, true);  break;
-    case WM_ICON_WIFI_OFF:  wifi_arcs(canvas, box, col, false);
-        nline(canvas, box, 180, 180, 820, 820, 90, col);        break;
-    case WM_ICON_VOLUME:
-        nrect(canvas, box, 150, 380, 180, 240, 40, col);
-        nline(canvas, box, 330, 380, 520, 220, 0, col);
-        nline(canvas, box, 330, 620, 520, 780, 0, col);
-        nrect(canvas, box, 470, 220, 60, 560, 30, col);
-        nring(canvas, box, 620, 500, 230, 80, col);
-        nring(canvas, box, 640, 500, 380, 80, col);
-        break;
-    case WM_ICON_VOLUME_MUTE:
-        nrect(canvas, box, 150, 380, 180, 240, 40, col);
-        nrect(canvas, box, 470, 220, 60, 560, 30, col);
-        nline(canvas, box, 330, 380, 520, 220, 0, col);
-        nline(canvas, box, 330, 620, 520, 780, 0, col);
-        nline(canvas, box, 640, 360, 900, 640, 90, col);
-        nline(canvas, box, 900, 360, 640, 640, 90, col);
-        break;
-    case WM_ICON_IME:
-        nring(canvas, box, 500, 500, 430, 80, col);       /* body outline via rounded rect */
-        nrect(canvas, box, 120, 300, 760, 400, 90, col);
-        /* keys punched out darker are hard without bg; draw key dots lighter */
-        {
-            uint32_t k = (col & 0x00FFFFFFu) | 0x66000000u;
-            for (int i = 0; i < 4; ++i) ndisc(canvas, box, 230 + i * 180, 430, 45, k);
-            for (int i = 0; i < 4; ++i) ndisc(canvas, box, 230 + i * 180, 570, 45, k);
-            nrect(canvas, box, 330, 545, 340, 60, 30, k);
-        }
-        break;
-    case WM_ICON_NOTIFICATIONS:
-        nrect(canvas, box, 300, 220, 400, 120, 60, col);
-        nring(canvas, box, 500, 520, 360, 90, col);
-        nrect(canvas, box, 180, 700, 640, 90, 45, col);
-        ndisc(canvas, box, 500, 850, 90, col);
-        break;
-    case WM_ICON_SETTINGS:
-        nring(canvas, box, 500, 500, 380, 110, col);
-        ndisc(canvas, box, 500, 500, 150, col);
-        for (int i = 0; i < 8; ++i) {
-            static const int sx[8] = {500,720,820,720,500,280,180,280};
-            static const int sy[8] = {180,280,500,720,820,720,500,280};
-            ndisc(canvas, box, sx[i], sy[i], 100, col);
-        }
-        break;
-    case WM_ICON_POWER:
-        nring(canvas, box, 500, 560, 340, 100, col);
-        nrect(canvas, box, 450, 150, 100, 380, 50, col);
-        break;
-    case WM_ICON_RESTART:
-        nring(canvas, box, 500, 500, 340, 100, col);
-        nrect(canvas, box, 500, 500, 260, 100, 0, (col & 0x00FFFFFFu)); /* erase-ish no-op */
-        ndisc(canvas, box, 780, 300, 120, col);
-        nline(canvas, box, 720, 180, 820, 420, 90, col);
-        break;
-    case WM_ICON_FOLDER:
-        nrect(canvas, box, 120, 300, 340, 160, 50, col);
-        nrect(canvas, box, 120, 380, 760, 460, 70, col);
-        break;
-    case WM_ICON_DOC:
-        nrect(canvas, box, 240, 140, 420, 720, 60, col);
-        nrect(canvas, box, 560, 140, 200, 220, 40, (col & 0x00FFFFFFu) | 0x99000000u);
-        break;
-    case WM_ICON_PERSON:
-        ndisc(canvas, box, 500, 340, 200, col);
-        nrect(canvas, box, 220, 620, 560, 300, 150, col);
-        break;
-    case WM_ICON_CLOSE:
-        nline(canvas, box, 220, 220, 780, 780, 110, col);
-        nline(canvas, box, 780, 220, 220, 780, 110, col);
-        break;
-    case WM_ICON_MINIMIZE:
-        nrect(canvas, box, 200, 720, 600, 90, 45, col);
-        break;
-    case WM_ICON_MAXIMIZE:
-        nring(canvas, box, 500, 500, 340, 90, col);
-        break;
-    case WM_ICON_RESTORE:
-        nring(canvas, box, 440, 560, 280, 90, col);
-        nline(canvas, box, 560, 300, 760, 300, 90, col);
-        nline(canvas, box, 760, 300, 760, 500, 90, col);
-        break;
-    case WM_ICON_CHEVRON_UP:
-        nline(canvas, box, 220, 620, 500, 340, 110, col);
-        nline(canvas, box, 500, 340, 780, 620, 110, col);
-        break;
-    case WM_ICON_TERMINAL:
-        nrect(canvas, box, 120, 200, 760, 600, 70, col);
-        nline(canvas, box, 260, 380, 440, 500, 80, (col & 0x00FFFFFFu) | 0xCC000000u);
-        nline(canvas, box, 440, 500, 260, 620, 80, (col & 0x00FFFFFFu) | 0xCC000000u);
-        break;
-    case WM_ICON_EDIT:
-        nline(canvas, box, 200, 800, 700, 300, 130, col);
-        nrect(canvas, box, 660, 200, 160, 160, 40, col);
-        nline(canvas, box, 200, 800, 320, 800, 90, col);
-        break;
-    default:
-        break;
-    }
+    if (!canvas) return;
+    const icon_cache_t *ic = icon_get(kind);
+    if (!ic) return;
+    blit_tinted(canvas, box, ic, argb);
 }
 
 void wm_icon_draw_cursor(wm_canvas_t *canvas, int32_t x, int32_t y,
@@ -215,28 +121,27 @@ void wm_icon_draw_cursor(wm_canvas_t *canvas, int32_t x, int32_t y,
     if (!canvas) return;
 
     if (style == WM_CURSOR_DEFAULT) {
-        /* Material-style filled arrow pointer, 18px tall. */
-        static const signed char pts[19] = {1,2,3,4,5,6,7,8,9,10,11,12,7,4,3,2,2,1,0};
-        /* outline pass */
-        for (int32_t r = 0; r < 19; ++r) {
-            int32_t span = pts[r];
-            for (int32_t cx = -1; cx <= span + 1; ++cx)
-                wm_canvas_put(canvas, x + cx, y + r, edge);
-            wm_canvas_put(canvas, x + span + 1, y + r, edge);
+        if (!g_cursor.tried) {
+            g_cursor.tried = 1;
+            g_cursor.px = wm_assets_load_png(ICON_DIR "cursor.png",
+                                             &g_cursor.w, &g_cursor.h);
         }
-        /* fill pass */
-        for (int32_t r = 1; r < 17; ++r) {
-            int32_t span = pts[r];
-            for (int32_t cx = 1; cx < span; ++cx)
-                wm_canvas_put(canvas, x + cx, y + r, fill);
+        if (g_cursor.px) {
+            uint32_t h = 22u;
+            uint32_t w = g_cursor.h ? (g_cursor.w * h / g_cursor.h) : h;
+            /* dark halo, then white body */
+            static const int8_t off[8][2] =
+                { {-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1} };
+            for (int i = 0; i < 8; ++i)
+                blit_tinted(canvas,
+                    (wm_rect_t){x + off[i][0], y + off[i][1], w, h}, &g_cursor, edge);
+            blit_tinted(canvas, (wm_rect_t){x, y, w, h}, &g_cursor, fill);
+            return;
         }
-        /* tail */
-        for (int32_t r = 12; r < 20; ++r) {
-            for (int32_t cx = 6; cx <= 9; ++cx)
-                wm_canvas_put(canvas, x + cx, y + r, fill);
-            wm_canvas_put(canvas, x + 5, y + r, edge);
-            wm_canvas_put(canvas, x + 10, y + r, edge);
-        }
+        /* asset missing -> simple triangle fallback */
+        for (int32_t r = 0; r < 18; ++r)
+            for (int32_t c = 0; c <= r && c < 12; ++c)
+                wm_canvas_put(canvas, x + c, y + r, (c == r) ? edge : fill);
         return;
     }
 
@@ -244,11 +149,11 @@ void wm_icon_draw_cursor(wm_canvas_t *canvas, int32_t x, int32_t y,
     bool hz = style == WM_CURSOR_RESIZE_HORIZONTAL;
     bool vt = style == WM_CURSOR_RESIZE_VERTICAL;
     bool nwse = style == WM_CURSOR_RESIZE_DIAGONAL_NW_SE;
-    for (int32_t off = -1; off <= 1; ++off) {
-        uint32_t lc = off == 0 ? fill : edge;
-        if (hz)        wm_canvas_line(canvas, cx - 7, cy + off, cx + 7, cy + off, lc);
-        else if (vt)   wm_canvas_line(canvas, cx + off, cy - 7, cx + off, cy + 7, lc);
-        else if (nwse) wm_canvas_line(canvas, cx - 6 + off, cy - 6, cx + 6 + off, cy + 6, lc);
-        else           wm_canvas_line(canvas, cx + 6 + off, cy - 6, cx - 6 + off, cy + 6, lc);
+    for (int32_t o = -1; o <= 1; ++o) {
+        uint32_t lc = o == 0 ? fill : edge;
+        if (hz)        wm_canvas_line(canvas, cx - 7, cy + o, cx + 7, cy + o, lc);
+        else if (vt)   wm_canvas_line(canvas, cx + o, cy - 7, cx + o, cy + 7, lc);
+        else if (nwse) wm_canvas_line(canvas, cx - 6 + o, cy - 6, cx + 6 + o, cy + 6, lc);
+        else           wm_canvas_line(canvas, cx + 6 + o, cy - 6, cx - 6 + o, cy + 6, lc);
     }
 }

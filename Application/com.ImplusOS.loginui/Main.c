@@ -75,6 +75,15 @@ static void *ui_realloc_sized(void *p, size_t oldsz, size_t newsz) {
 #define FONT_PATH        "/Userland/com.ImplusOS.windowmanager/Resource/Fonts/NotoSansJP-Regular.ttf"
 #define FONT_PATH_ALT    "/BootManager/Resource/Fonts/NotoSansJP-Regular.ttf"
 #define WALLPAPER_PATH   "/Userland/com.ImplusOS.windowmanager/Resource/Background.png"
+#define MD_ICON_DIR      "/Userland/com.ImplusOS.windowmanager/Resource/Icons/md/"
+
+/* palette mirrors the window manager's plasma.theme (light) */
+#define UI_SURFACE      0xFFFFFFu
+#define UI_SURFACE_ALT  0xF3F4F6u
+#define UI_TEXT         0x1C1B1Fu
+#define UI_TEXT_DIM     0x49454Fu
+#define UI_ACCENT       0x1C1B1Fu
+#define UI_ACCENT_HOVER 0x333135u
 
 #define USER_DB_DIR      "/var/System"
 #define USER_DB_FILE     "/var/System/users.db"
@@ -312,9 +321,9 @@ static void compose_wallpaper(void) {
             uint32_t sx = (uint32_t)(((int64_t)(x + ox) * sden) / snum);
             if (sx >= (uint32_t)iw) sx = (uint32_t)iw - 1;
             const uint8_t *s = srow + sx * 4;
-            uint8_t r = (uint8_t)((uint32_t)s[0] * 78u / 100u);
-            uint8_t g = (uint8_t)((uint32_t)s[1] * 78u / 100u);
-            uint8_t b = (uint8_t)((uint32_t)s[2] * 78u / 100u);
+            uint8_t r = (uint8_t)((uint32_t)s[0] * 90u / 100u);
+            uint8_t g = (uint8_t)((uint32_t)s[1] * 90u / 100u);
+            uint8_t b = (uint8_t)((uint32_t)s[2] * 90u / 100u);
             g_wallpaper[y * g_w + x] = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
         }
     }
@@ -633,15 +642,76 @@ static void mouse_poll(mouse_t *m) {
     }
 }
 
+/* the shared external Material cursor asset (white RGBA, alpha = coverage) */
+static uint32_t *g_cursor_px;
+static int       g_cursor_w, g_cursor_h, g_cursor_tried;
+
+static uint32_t *load_png_rgba(const char *path, int *w, int *h) {
+    file_stat_t st;
+    if (file_stat(path, &st) < 0 || !st.exists || st.is_dir || st.size == 0 ||
+        st.size > 4u * 1024u * 1024u)
+        return NULL;
+    int32_t fd = file_open(path, 0);
+    if (fd < 0) return NULL;
+    uint8_t *enc = malloc(st.size);
+    if (!enc) { file_close(fd); return NULL; }
+    uint32_t got = 0;
+    while (got < st.size) {
+        int64_t n = file_read(fd, enc + got, st.size - got);
+        if (n <= 0) break;
+        got += (uint32_t)n;
+    }
+    file_close(fd);
+    if (got != st.size) { free(enc); return NULL; }
+    int c;
+    uint8_t *rgba = stbi_load_from_memory(enc, (int)st.size, w, h, &c, 4);
+    free(enc);
+    if (!rgba) return NULL;
+    uint32_t *out = malloc((size_t)(*w) * (size_t)(*h) * 4);
+    if (out)
+        for (int i = 0; i < (*w) * (*h); ++i)
+            out[i] = ((uint32_t)rgba[i*4+3] << 24) | ((uint32_t)rgba[i*4] << 16) |
+                     ((uint32_t)rgba[i*4+1] << 8) | rgba[i*4+2];
+    stbi_image_free(rgba);
+    return out;
+}
+
+/* scaled, tinted blit of a white RGBA sprite (top-left at x,y) */
+static void blit_sprite(const uint32_t *src, int sw, int sh, int x, int y,
+                        int dw, int dh, uint32_t rgb, uint8_t alpha) {
+    if (!src || dw <= 0 || dh <= 0) return;
+    int dnx = dw > 1 ? dw - 1 : 1, dny = dh > 1 ? dh - 1 : 1;
+    for (int j = 0; j < dh; ++j) {
+        int sy = j * (sh - 1) / dny;
+        for (int i = 0; i < dw; ++i) {
+            int sx = i * (sw - 1) / dnx;
+            uint32_t sa = src[sy * sw + sx] >> 24;
+            if (!sa) continue;
+            px(x + i, y + j, rgb, (uint8_t)(sa * alpha / 255u));
+        }
+    }
+}
+
 static void draw_cursor(int x, int y) {
-    /* simple arrow: a filled triangle with a 1px dark outline */
+    if (!g_cursor_tried) {
+        g_cursor_tried = 1;
+        g_cursor_px = load_png_rgba(MD_ICON_DIR "cursor.png", &g_cursor_w, &g_cursor_h);
+    }
+    if (g_cursor_px) {
+        int h = 22, w = g_cursor_h ? g_cursor_w * h / g_cursor_h : h;
+        static const int off[8][2] =
+            { {-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1} };
+        for (int i = 0; i < 8; ++i)
+            blit_sprite(g_cursor_px, g_cursor_w, g_cursor_h,
+                        x + off[i][0], y + off[i][1], w, h, 0x1A1A1A, 220);
+        blit_sprite(g_cursor_px, g_cursor_w, g_cursor_h, x, y, w, h, 0xFFFFFF, 255);
+        return;
+    }
     for (int j = 0; j < 18; ++j) {
         int span = 18 - j;
         if (j > 12) span = j - 6;
         if (span < 0) span = 0;
-        for (int i = 0; i < span && i < 12; ++i) {
-            px(x + i, y + j, 0xFFFFFF, 255);
-        }
+        for (int i = 0; i < span && i < 12; ++i) px(x + i, y + j, 0xFFFFFF, 255);
         px(x + span, y + j, 0x1A1A1A, 200);
     }
     for (int i = 0; i < 12; ++i) px(x + i, y, 0x1A1A1A, 200);
@@ -667,20 +737,20 @@ static void field_key(field_t *f, const input_keyboard_event_t *ev) {
 }
 
 static void draw_field(int x, int y, int w, int h, const field_t *f, bool focus) {
-    fill_round_rect(x, y, w, h, 8, 0x0B1220, 210);
-    stroke_round_rect(x, y, w, h, 8, focus ? 0x4F86F7 : 0x33415A, focus ? 255 : 180);
+    fill_round_rect(x, y, w, h, 8, UI_SURFACE_ALT, 255);
+    stroke_round_rect(x, y, w, h, 8, focus ? UI_ACCENT : 0x000000, focus ? 255 : 34);
     int tx = x + 14, ty = y + h / 2;
     if (f->hidden) {
         int dots = (int)f->len, dx = tx;
         for (int i = 0; i < dots && dx < x + w - 14; ++i, dx += 14)
-            fill_circle(dx + 4, ty, 4, 0xE6EDF7, 255);
+            fill_circle(dx + 4, ty, 4, UI_TEXT, 255);
     } else {
         char tmp[130];
         strncpy(tmp, f->buf, sizeof(tmp) - 1); tmp[sizeof(tmp) - 1] = '\0';
-        draw_text_top(tx, y + (h - 15) / 2, tmp, 15.0f, 0xE6EDF7);
+        draw_text_top(tx, y + (h - 15) / 2, tmp, 15.0f, UI_TEXT);
         if (focus) {
             int cw = text_width(tmp, scale_for(15.0f));
-            fill_rect(tx + cw + 1, y + 8, 2, h - 16, 0x8AB4FF, 255);
+            fill_rect(tx + cw + 1, y + 8, 2, h - 16, UI_ACCENT, 255);
         }
     }
 }
@@ -807,27 +877,29 @@ int _start(void) {
                 bool active = (scr == SCR_PASSWORD && (int)i == sel);
                 if (hov || active) {
                     fill_round_rect(list_x - 10, ry, rw, row_h - 8, 12,
-                                    active ? 0xFFFFFF : 0xFFFFFF, active ? 36 : 22);
+                                    0xFFFFFF, active ? 60 : 34);
                 }
                 draw_avatar(list_x + av_r, ry + (row_h - 8) / 2, av_r, accent_for(i),
                             g_users[i].name, 22.0f);
                 if (g_font_ok)
+                    draw_text_top(list_x + av_r * 2 + 17, ry + (row_h - 8) / 2 - 9,
+                                  g_users[i].name, 17.0f, 0xCC000000);
                     draw_text_top(list_x + av_r * 2 + 16, ry + (row_h - 8) / 2 - 10,
-                                  g_users[i].name, 17.0f, 0xF4F7FB);
+                                  g_users[i].name, 17.0f, 0xFFFFFF);
                 if (hov) hover_row = (int)i;
             }
             /* "add user" affordance under the list */
             int ay = list_bottom - (int)(g_user_count + 1) * row_h;
             bool ah = mouse.x >= list_x - 10 && mouse.x <= list_x - 10 + 300 &&
                       mouse.y >= ay && mouse.y <= ay + row_h - 8;
-            if (ah) fill_round_rect(list_x - 10, ay, 300, row_h - 8, 12, 0xFFFFFF, 22);
-            fill_circle(list_x + av_r, ay + (row_h - 8) / 2, av_r, 0x33415A, 255);
+            if (ah) fill_round_rect(list_x - 10, ay, 300, row_h - 8, 12, 0xFFFFFF, 34);
+            fill_circle(list_x + av_r, ay + (row_h - 8) / 2, av_r, 0x5F6368, 255);
             if (g_font_ok) {
                 float sc = scale_for(26.0f);
                 draw_text(list_x + av_r - text_width("+", sc) / 2,
                           ay + (row_h - 8) / 2 + 9, "+", sc, 0xFFFFFF);
                 draw_text_top(list_x + av_r * 2 + 16, ay + (row_h - 8) / 2 - 9,
-                              "新規ユーザー", 16.0f, 0xC7D2E0);
+                              "新規ユーザー", 16.0f, 0xFFFFFF);
             }
             add_hover = ah ? 1 : 0;
         }
@@ -836,8 +908,8 @@ int _start(void) {
         if (scr == SCR_PASSWORD || scr == SCR_CREATE) {
             int cw = 420, ch = (scr == SCR_CREATE) ? 400 : 300;
             int cx = (g_w - cw) / 2, cy = (g_h - ch) / 2;
-            fill_round_rect(cx, cy, cw, ch, 18, 0x0E1526, 235);
-            stroke_round_rect(cx, cy, cw, ch, 18, 0x2A3A55, 200);
+            fill_round_rect(cx, cy, cw, ch, 18, UI_SURFACE, 255);
+            stroke_round_rect(cx, cy, cw, ch, 18, 0x000000, 34);
 
             if (scr == SCR_PASSWORD) {
                 draw_avatar(cx + cw / 2, cy + 66, 34, accent_for((uint32_t)sel),
@@ -845,33 +917,33 @@ int _start(void) {
                 if (g_font_ok) {
                     float ns = scale_for(21.0f);
                     draw_text(cx + (cw - text_width(g_users[sel].name, ns)) / 2, cy + 138,
-                              g_users[sel].name, ns, 0xFFFFFF);
-                    draw_text_top(cx + 40, cy + 158, "パスワード", 12.0f, 0x8AA0BC);
+                              g_users[sel].name, ns, UI_TEXT);
+                    draw_text_top(cx + 40, cy + 158, "パスワード", 12.0f, UI_TEXT_DIM);
                 }
                 draw_field(cx + 40, cy + 178, cw - 80, 40, &fpw, true);
                 if (g_font_ok)
-                    draw_text_top(cx + 40, cy + 232, "Enter でログイン / Esc で戻る", 11.0f, 0x6B7E99);
+                    draw_text_top(cx + 40, cy + 232, "Enter でログイン / Esc で戻る", 11.0f, UI_TEXT_DIM);
                 if (status[0] && g_font_ok)
                     draw_text_top(cx + 40, cy + 256, status, 11.0f, 0xF08A8A);
             } else {
                 if (g_font_ok) {
                     float ts = scale_for(20.0f);
                     draw_text(cx + (cw - text_width("ようこそ ImplusOS へ", ts)) / 2, cy + 46,
-                              "ようこそ ImplusOS へ", ts, 0xFFFFFF);
-                    draw_text_top(cx + 40, cy + 66, "最初のユーザーを作成します", 12.0f, 0x8AA0BC);
+                              "ようこそ ImplusOS へ", ts, UI_TEXT);
+                    draw_text_top(cx + 40, cy + 66, "最初のユーザーを作成します", 12.0f, UI_TEXT_DIM);
 
-                    draw_text_top(cx + 40, cy + 104, "ユーザー名", 11.0f, 0x8AA0BC);
+                    draw_text_top(cx + 40, cy + 104, "ユーザー名", 11.0f, UI_TEXT_DIM);
                 }
                 draw_field(cx + 40, cy + 122, cw - 80, 38, &fname, create_focus == 0);
-                if (g_font_ok) draw_text_top(cx + 40, cy + 176, "パスワード", 11.0f, 0x8AA0BC);
+                if (g_font_ok) draw_text_top(cx + 40, cy + 176, "パスワード", 11.0f, UI_TEXT_DIM);
                 draw_field(cx + 40, cy + 194, cw - 80, 38, &fpw, create_focus == 1);
-                if (g_font_ok) draw_text_top(cx + 40, cy + 248, "パスワード（確認）", 11.0f, 0x8AA0BC);
+                if (g_font_ok) draw_text_top(cx + 40, cy + 248, "パスワード（確認）", 11.0f, UI_TEXT_DIM);
                 draw_field(cx + 40, cy + 266, cw - 80, 38, &fpw2, create_focus == 2);
 
                 int by = cy + 320;
                 bool bhov = mouse.x >= cx + 40 && mouse.x <= cx + cw - 40 &&
                             mouse.y >= by && mouse.y <= by + 40;
-                fill_round_rect(cx + 40, by, cw - 80, 40, 10, bhov ? 0x5B90F8 : 0x4F86F7, 255);
+                fill_round_rect(cx + 40, by, cw - 80, 40, 10, bhov ? UI_ACCENT_HOVER : UI_ACCENT, 255);
                 if (g_font_ok)
                     draw_text(cx + (cw - text_width("作成してログイン", scale_for(14.0f))) / 2,
                               by + 26, "作成してログイン", scale_for(14.0f), 0xFFFFFF);
@@ -928,7 +1000,7 @@ int _start(void) {
         if (g_font_ok && scr == SCR_PICK) {
             const char *h1 = "サインイン";
             draw_text(64, 96, h1, scale_for(30.0f), 0xFFFFFF);
-            draw_text_top(64, 112, "ユーザーを選択してください", 13.0f, 0xC7D2E0);
+            draw_text_top(64, 112, "ユーザーを選択してください", 13.0f, 0xF0F0F0);
         }
 
         draw_cursor(mouse.x, mouse.y);

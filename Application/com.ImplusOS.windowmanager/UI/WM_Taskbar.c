@@ -16,7 +16,6 @@
 /* --- taskbar geometry (px) --- */
 #define TB_PAD           5
 #define TB_START_W       46u
-#define TB_PIN_W         42u
 #define TB_TASK_MAX      220u
 #define TB_TRAY_ICON_W   30u
 #define TB_NOTIF_W       34u
@@ -171,16 +170,12 @@ wm_rect_t wm_taskbar_clock_rect(const wm_state_t *state)
     return (wm_rect_t){x, dock.y, TB_CLOCK_W + 6u, dock.h};
 }
 
-static uint32_t pinned_count(const wm_state_t *state)
-{
-    uint32_t n = state->assets.app_count;
-    return n < WM_TASKBAR_MAX_PINS ? n : WM_TASKBAR_MAX_PINS;
-}
-
+/* Only running windows sit on the taskbar -- the Start button, then the
+ * open-window buttons. (No pinned apps.list shortcuts.) */
 static int32_t tasks_left_x(const wm_state_t *state)
 {
-    return TB_PAD + (int32_t)TB_START_W + 6 +
-           (int32_t)(pinned_count(state) * TB_PIN_W);
+    (void)state;
+    return TB_PAD + (int32_t)TB_START_W + 8;
 }
 
 static bool cursor_in(const wm_state_t *state, wm_rect_t r)
@@ -262,29 +257,6 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
                         start.y + (int32_t)(start.h - isz) / 2, isz, isz},
             WM_ICON_APPS,
             state->launcher_open ? state->theme.accent : state->theme.text);
-    }
-
-    /* --- pinned apps, in apps.list order, straight after Start --- */
-    uint32_t pins = pinned_count(state);
-    for (uint32_t i = 0; i < pins; ++i) {
-        wm_launcher_app_t *app = &state->assets.apps[i];
-        wm_rect_t slot = {pad + (int32_t)TB_START_W + 6 + (int32_t)(i * TB_PIN_W),
-                          dock.y + pad, TB_PIN_W - 4u, dock.h - (uint32_t)pad * 2u};
-        bool hover = cursor_in(state, slot);
-        if (hover) wm_canvas_fill_rounded(canvas, slot, 8u, state->theme.surface_hover);
-        wm_rect_t ir = {slot.x + (int32_t)(slot.w - 24u) / 2,
-                        slot.y + (int32_t)(slot.h - 24u) / 2, 24u, 24u};
-        if (app->icon_pixels) {
-            wm_canvas_blit_scaled(canvas, ir, app->icon_pixels,
-                                  app->icon_width, app->icon_height, 255u, 6u);
-        } else {
-            wm_canvas_fill_rounded(canvas, ir, 7u, state->theme.surface_alt);
-            wm_font_draw(&state->font, canvas,
-                         ir.x + (int32_t)(ir.w - 12u) / 2,
-                         ir.y + (int32_t)(ir.h - 13u) / 2,
-                         app->badge[0] ? app->badge : "?",
-                         state->theme.text, state->theme.font_small, 20u);
-        }
     }
 
     /* --- running windows --- */
@@ -400,15 +372,6 @@ wm_taskbar_hit_t wm_taskbar_hit_test(wm_state_t *state, int32_t x, int32_t y)
 
     if (x >= TB_PAD && x < TB_PAD + (int32_t)TB_START_W) {
         result.kind = WM_TASKBAR_HIT_LAUNCHER;
-        return result;
-    }
-
-    uint32_t pins = pinned_count(state);
-    int32_t pin0 = TB_PAD + (int32_t)TB_START_W + 6;
-    if (x >= pin0 && x < pin0 + (int32_t)(pins * TB_PIN_W)) {
-        result.kind = WM_TASKBAR_HIT_PIN;
-        result.index = (uint32_t)((x - pin0) / (int32_t)TB_PIN_W);
-        if (result.index >= pins) result.index = pins - 1u;
         return result;
     }
 
