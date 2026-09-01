@@ -1098,32 +1098,40 @@ void _start(void) {
      * be dropped again at runtime via service_unload(). */
     service_load_all();
 
-    static const char *const wm_paths[] = {
-        "/Userland/com.ImplusOS.windowmanager/com.ImplusOS.windowmanager.ELF",
+    /* Hand off to the graphical login screen. It owns the rest of the
+     * session: it authenticates the user (userland credential store at
+     * /var/System/users.db, hashed with Library/Crypto), records the
+     * session under /run/, then starts the window-manager session and
+     * stays resident as the session leader. */
+    static const char *const login_paths[] = {
+        "/Userland/com.ImplusOS.loginui/com.ImplusOS.loginui.ELF",
     };
-    int32_t wm_spawn_pid = spawn_with_fallbacks(wm_paths, 1);
-    process_set_priority(wm_spawn_pid, 3);
+    int32_t login_pid = spawn_with_fallbacks(login_paths, 1);
+    process_set_priority(login_pid, 3);
     process_yield();
 
-    int32_t wm_pid = -1;
-    for (int i = 0; i < 250; i++) {
-        wm_pid = window_get_wm_pid();
-        if (wm_pid >= 0) break;
-        sleep_ms(20);
-    }
-
-    if (wm_pid >= 0) {
-        static const char *const sysnotif_paths[] = {
-            "/Userland/com.ImplusOS.sysnotif/com.ImplusOS.sysnotif.ELF",
+    if (login_pid < 0) {
+        /* No login screen on the image -- fall back to launching the
+         * window manager directly so the system is still usable. */
+        static const char *const wm_paths[] = {
+            "/Userland/com.ImplusOS.windowmanager/com.ImplusOS.windowmanager.ELF",
         };
-        spawn_with_fallbacks(sysnotif_paths, 1);
-    }
+        int32_t wm_spawn_pid = spawn_with_fallbacks(wm_paths, 1);
+        process_set_priority(wm_spawn_pid, 3);
+        process_yield();
 
-    if (wm_pid >= 0) {
-        static const char *const doom_paths[] = {
-            "/Userland/Doom/Doom.ELF",
-        };
-        spawn_with_fallbacks(doom_paths, 1);
+        int32_t wm_pid = -1;
+        for (int i = 0; i < 250; i++) {
+            wm_pid = window_get_wm_pid();
+            if (wm_pid >= 0) break;
+            sleep_ms(20);
+        }
+        if (wm_pid >= 0) {
+            static const char *const sysnotif_paths[] = {
+                "/Userland/com.ImplusOS.sysnotif/com.ImplusOS.sysnotif.ELF",
+            };
+            spawn_with_fallbacks(sysnotif_paths, 1);
+        }
     }
 
     if (g_bg_cache) {
