@@ -269,10 +269,9 @@ static bool cursor_state_changed(const wm_state_t *state)
 
 static wm_rect_t cursor_damage_rect(uint32_t x, uint32_t y)
 {
-    return (wm_rect_t){(int32_t)x - 3,
-                       (int32_t)y - 3,
-                       WM_CURSOR_WIDTH + 12u,
-                       WM_CURSOR_HEIGHT + 12u};
+    /* Generous: the pointer sprite (UI/WM_Icons.c) is ~24px plus a 1px
+     * dark halo, and the diagonal resize cursors reach a little further. */
+    return (wm_rect_t){(int32_t)x - 4, (int32_t)y - 4, 40u, 40u};
 }
 
 static void flush_rect(wm_state_t *state, wm_rect_t rect)
@@ -320,6 +319,19 @@ static void add_cursor_damage(wm_state_t *state)
 {
     wm_compositor_t *c = &state->compositor;
     wm_rect_t bounds = display_bounds(state);
+
+    /* The pointer sprite is partially transparent and is re-stamped onto
+     * the (never-cleared) shadow buffer on every render. If some other
+     * region is being redrawn this frame while the cursor sits still, the
+     * area under the cursor must be re-composited first -- otherwise the
+     * translucent sprite blends onto its own previous pixels and the edge
+     * / halo darkens and eventually flushes to screen as a smear. */
+    if (state->scene.cursor_visible && !wm_region_is_empty(&c->damage))
+        wm_region_add(&c->damage,
+                      cursor_damage_rect(state->scene.cursor_x,
+                                         state->scene.cursor_y),
+                      bounds);
+
     if (!cursor_state_changed(state)) return;
     if (c->previous_cursor_visible)
         wm_region_add(&c->damage, cursor_damage_rect(c->previous_cursor_x,

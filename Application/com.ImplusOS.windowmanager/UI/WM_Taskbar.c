@@ -244,19 +244,24 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
 
     int32_t pad = TB_PAD;
 
-    /* --- Start button (Material "apps" grid) --- */
+    /* --- Start button: the ImplusOS logo (Resource/Icons/Logo.png) --- */
     wm_rect_t start = {pad, dock.y + pad, TB_START_W - (uint32_t)pad, dock.h - (uint32_t)pad * 2u};
     bool start_hover = cursor_in(state, start);
     uint32_t start_bg = state->launcher_open ? state->theme.accent_soft :
                         start_hover           ? state->theme.surface_hover : 0u;
     if (start_bg) wm_canvas_fill_rounded(canvas, start, 8u, start_bg);
     {
-        uint32_t isz = 22u;
-        wm_icon_draw(canvas,
-            (wm_rect_t){start.x + (int32_t)(start.w - isz) / 2,
-                        start.y + (int32_t)(start.h - isz) / 2, isz, isz},
-            WM_ICON_APPS,
-            state->launcher_open ? state->theme.accent : state->theme.text);
+        uint32_t isz = 24u;
+        wm_rect_t ir = {start.x + (int32_t)(start.w - isz) / 2,
+                        start.y + (int32_t)(start.h - isz) / 2, isz, isz};
+        const wm_icon_image_t *logo = &state->assets.system_icons.logo;
+        if (logo->pixels && logo->width && logo->height) {
+            wm_canvas_blit_scaled(canvas, ir, logo->pixels,
+                                  logo->width, logo->height, 255u, 4u);
+        } else {
+            wm_icon_draw(canvas, ir, WM_ICON_APPS,
+                state->launcher_open ? state->theme.accent : state->theme.text);
+        }
     }
 
     /* --- running windows --- */
