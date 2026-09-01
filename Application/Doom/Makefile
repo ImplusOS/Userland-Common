@@ -9,17 +9,17 @@ ELF      := $(BUILD_DIR)/$(APP_NAME).ELF
 APP_SRC := $(shell find $(SRC_DIR) -name '*.c')
 APP_OBJS := $(APP_SRC:%.c=$(BUILD_DIR)/%.o)
 
-include ../../AppCommon.mk
+include ../../Source/AppCommon.mk
 
 OBJS := $(APP_OBJS) $(COMMON_OBJS)
 
 CFLAGS := -ffreestanding -fno-stack-protector -fno-pic -fno-builtin \
           $(ARCH_CFLAGS) -nostdlib -nostartfiles -nodefaultlibs \
-          -I../../../libc/I_libc/include -I../../../libc/I_libc/include/sys \
-          -I../../../Userland \
-          -I../../../Userland/API \
+          -I../../../libc/I_libc/Source/include -I../../../libc/I_libc/Source/include/sys \
+          -I../../Source \
+          -I../../API/Source \
           -Wall -Wextra -Wtype-limits -Wconversion -Wsign-conversion -Wshadow -MMD -MP
-LDFLAGS := -T ../../../Userland/Userland.ld -e _start -nostdlib --build-id=none
+LDFLAGS := -T ../../Source/Userland.ld -e _start -nostdlib --build-id=none
 
 RESOURCE_DIR := Resource
 
