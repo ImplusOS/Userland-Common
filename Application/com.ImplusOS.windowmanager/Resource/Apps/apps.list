@@ -1,6 +1,7 @@
 # Display name|ELF path|fallback badge
+Files|/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF|FM
+Editor|/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF|ED
 BusyBox|/Userland/BusyBox/BusyBox.ELF|BB
 Doom|/Userland/Doom/Doom.ELF|DM
-Chromium|/Userland/Chromium/Chromium.ELF|CM
 GTK3 Demo|/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF|GK
 Wayland Compositor|/Userland/com.ImplusOS.waylandcompositor/com.ImplusOS.waylandcompositor.ELF|WL
