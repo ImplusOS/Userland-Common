@@ -8,6 +8,8 @@
 #include "../UI/WM_Dialog.h"
 #include "../UI/WM_StartMenu.h"
 #include "../UI/WM_Taskbar.h"
+#include "../UI/WM_Icons.h"
+#include "../UI/WM_Desktop.h"
 #include "../UI/WM_WifiPanel.h"
 #include "../../../../Userland/Source/Syscalls.h"
 
@@ -133,6 +135,10 @@ void wm_compositor_generate_background(wm_state_t *state)
                 img_w, img_h, 255u, 0u);
         }
     }
+
+    /* Desktop icons (default: none) are painted into the static background;
+     * WM_Main re-runs this once the font is available. */
+    wm_desktop_draw(state, &canvas);
 }
 
 void wm_compositor_damage_all(wm_state_t *state)
@@ -232,10 +238,12 @@ static void draw_cursor(wm_state_t *state, wm_canvas_t *canvas)
     if (!state->scene.cursor_visible) return;
     int32_t x = (int32_t)state->scene.cursor_x;
     int32_t y = (int32_t)state->scene.cursor_y;
-    if (state->scene.cursor_style == WM_CURSOR_DEFAULT)
-        draw_default_cursor(state, canvas, x, y);
-    else
-        draw_resize_cursor(state, canvas, x, y);
+    /* Material-style white pointer with a dark edge, readable on any
+     * background (see UI/WM_Icons.c). */
+    (void)draw_default_cursor;
+    (void)draw_resize_cursor;
+    wm_icon_draw_cursor(canvas, x, y, state->scene.cursor_style,
+                        0xFFFFFFFFu, 0xFF1A1A1Au);
 }
 
 static void draw_cursor_on_shadow(wm_state_t *state)

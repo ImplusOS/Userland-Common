@@ -89,6 +89,7 @@ static bool wm_service_do_deferred_work(wm_state_t *state)
 
     if (!state->font.loaded) {
         (void)wm_font_init(&state->font, WM_FONT_PATH);
+        wm_compositor_generate_background(state);   /* now with desktop-icon labels */
         wm_compositor_damage_all(state);
         return true;
     }

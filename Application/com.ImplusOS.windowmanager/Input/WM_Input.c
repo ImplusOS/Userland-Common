@@ -5,6 +5,7 @@
 #include "../SceneGraph/WM_Node.h"
 #include "../UI/WM_StartMenu.h"
 #include "../UI/WM_Taskbar.h"
+#include "../UI/WM_Desktop.h"
 #include "../UI/WM_Notification.h"
 #include "../UI/WM_Dialog.h"
 #include "../UI/WM_WifiPanel.h"
@@ -494,6 +495,30 @@ static bool handle_taskbar_click(wm_state_t *state)
             perform_wifi_action(state, (wm_wifi_action_t){WM_WIFI_ACTION_SCAN, 0u});
         }
         damage_ui(state);
+    } else if (hit.kind == WM_TASKBAR_HIT_PIN) {
+        if (hit.index < state->assets.app_count &&
+            state->assets.apps[hit.index].path[0]) {
+            process_spawn(state->assets.apps[hit.index].path);
+        }
+        state->launcher_open = false;
+        state->search_len = 0u;
+        state->search_text[0] = '\0';
+        state->search_active = false;
+        wm_notification_close_center(state);
+        close_wifi_panel(state);
+        damage_ui(state);
+    } else if (hit.kind == WM_TASKBAR_HIT_AUDIO ||
+               hit.kind == WM_TASKBAR_HIT_IME) {
+        /* Audio + IME trays are stubs today. Close any open shell surface
+         * and swallow the click; the hit kinds exist so a future mixer /
+         * input-method panel can hang off them without touching layout. */
+        state->launcher_open = false;
+        state->search_len = 0u;
+        state->search_text[0] = '\0';
+        state->search_active = false;
+        wm_notification_close_center(state);
+        close_wifi_panel(state);
+        damage_ui(state);
     } else if (hit.kind == WM_TASKBAR_HIT_WINDOW) {
         wm_window_t *window = wm_scene_find(&state->scene, hit.window_id);
         if (!window) return true;
@@ -634,7 +659,12 @@ static void handle_window_click(wm_state_t *state, uint64_t now_ms)
     wm_hit_zone_t zone = WM_HIT_NONE;
     wm_window_t *window = wm_scene_hit_test(state,
         (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y, &zone);
-    if (!window) return;
+    if (!window) {
+        const char *target = wm_desktop_hit_test(state,
+            (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y);
+        if (target) process_spawn(target);
+        return;
+    }
     wm_scene_raise(state, window);
     wm_scene_focus(state, window);
     if (zone == WM_HIT_CLOSE)    { wm_scene_destroy_window(state, window->id); return; }

@@ -8,15 +8,22 @@ typedef enum {
     WM_TASKBAR_HIT_WINDOW,
     WM_TASKBAR_HIT_CLOCK,
     WM_TASKBAR_HIT_NOTIFICATION,
-    WM_TASKBAR_HIT_NETWORK
+    WM_TASKBAR_HIT_NETWORK,
+    WM_TASKBAR_HIT_AUDIO,
+    WM_TASKBAR_HIT_IME,
+    WM_TASKBAR_HIT_PIN
 } wm_taskbar_hit_kind_t;
 
 typedef struct {
     wm_taskbar_hit_kind_t kind;
-    uint32_t window_id;
+    uint32_t window_id;   /* WM_TASKBAR_HIT_WINDOW */
+    uint32_t index;       /* WM_TASKBAR_HIT_PIN -> assets.apps[] index */
 } wm_taskbar_hit_t;
 
 #define NTP_REFRESH_MS 3600000u
+
+/* how many apps.list entries are pinned to the taskbar after the Start button */
+#define WM_TASKBAR_MAX_PINS 6u
 
 wm_rect_t wm_taskbar_rect(const wm_state_t *state);
 wm_rect_t wm_taskbar_clock_rect(const wm_state_t *state);

@@ -3,10 +3,34 @@
 #include "../Compositor/WM_Raster.h"
 #include "../Font/WM_Font.h"
 #include "WM_Taskbar.h"
+#include "WM_Icons.h"
 #include "../../../../Userland/API/Source/Process.h"
+#include "../../../../Userland/API/Source/File.h"
 
 #include <string.h>
 #include <stdio.h>
+
+/* Logged-in user, read once from the session file the login screen writes. */
+static const char *sm_session_user(void)
+{
+    static char name[64];
+    static int loaded = 0;
+    if (!loaded) {
+        loaded = 1;
+        name[0] = '\0';
+        int32_t fd = file_open("/run/session.user", 0);
+        if (fd >= 0) {
+            int64_t n = file_read(fd, name, sizeof(name) - 1);
+            file_close(fd);
+            if (n > 0) {
+                name[n] = '\0';
+                for (char *p = name; *p; ++p) if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+            }
+        }
+        if (!name[0]) { name[0] = 'U'; name[1] = 's'; name[2] = 'e'; name[3] = 'r'; name[4] = '\0'; }
+    }
+    return name;
+}
 
 static bool str_icontains(const char *haystack, const char *needle)
 {
@@ -215,22 +239,19 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
         wm_rect_t circle = {menu.x + (int32_t)SM_HEADER_PAD_LEFT,
                             menu.y + (int32_t)SM_HEADER_PAD_TOP,
                             SM_ICON_SIZE, SM_ICON_SIZE};
-        wm_canvas_fill_rounded(canvas, circle, 16u,
-            state->theme.text | 0xFF000000u);
-        for (int r = 0; r < 3; r++)
-            for (int c = 0; c < 3; c++)
-                wm_canvas_fill(canvas,
-                    (wm_rect_t){circle.x + 9 + c*5, circle.y + 9 + r*5, 3u, 3u},
-                    0xFFFFFFFFu);
+        wm_canvas_fill_rounded(canvas, circle, 16u, state->theme.accent | 0xFF000000u);
+        wm_icon_draw(canvas,
+            (wm_rect_t){circle.x + 6, circle.y + 6, circle.w - 12u, circle.h - 12u},
+            WM_ICON_PERSON, 0xFFFFFFFFu);
         int32_t text_x = menu.x + (int32_t)SM_HEADER_PAD_LEFT + (int32_t)SM_ICON_SIZE + 10;
         uint32_t text_max = menu.w > (SM_HEADER_PAD_LEFT + SM_ICON_SIZE + 20u) ?
             menu.w - SM_HEADER_PAD_LEFT - SM_ICON_SIZE - 20u : 0u;
         wm_font_draw(&state->font, canvas, text_x,
                      menu.y + (int32_t)SM_HEADER_PAD_TOP,
-                     "Applications", state->theme.text, ft, text_max);
+                     sm_session_user(), state->theme.text, ft, text_max);
         wm_font_draw(&state->font, canvas, text_x,
                      menu.y + (int32_t)SM_HEADER_PAD_TOP + (int32_t)(ft + 0.5f) + 2,
-                     "ImplusOS Workspace", state->theme.text_dim, fs, text_max);
+                     "ImplusOS", state->theme.text_dim, fs, text_max);
     }
 
     uint32_t sep_y = sm_header_height(state);
@@ -243,11 +264,11 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
         wm_rect_t sb = {menu.x + 12, sb_y, menu.w - 24u, SM_SEARCH_H};
         wm_canvas_fill_rounded(canvas, sb, 12u, state->theme.surface_alt);
         uint32_t isz = 16u;
-        wm_canvas_draw_icon(canvas,
+        wm_icon_draw(canvas,
             (wm_rect_t){sb.x + 10, sb.y + (int32_t)(sb.h - isz)/2, isz, isz},
-            &state->assets.system_icons.search, 160u, 2u, state->theme.text_dim);
+            WM_ICON_SEARCH, state->theme.text_dim);
         const char *display = state->search_len > 0u ?
-            state->search_text : "Search apps...";
+            state->search_text : "アプリを検索";
         uint32_t tc = state->search_len > 0u ?
             state->theme.text : state->theme.text_dim;
         wm_font_draw(&state->font, canvas, sb.x + 34, sb.y + 10,
@@ -268,7 +289,7 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
 
     {
         int32_t label_y = menu.y + (int32_t)sep_y + 1 + (int32_t)SM_SEARCH_H;
-        const char *label = state->search_len > 0u ? "Search results" : "All Apps";
+        const char *label = state->search_len > 0u ? "検索結果" : "すべてのアプリ";
         wm_font_draw(&state->font, canvas, menu.x + (int32_t)SM_LABEL_PAD, label_y,
                      label, state->theme.text_dim, fs,
                      menu.w > 28u ? menu.w - 28u : 0u);
@@ -367,12 +388,10 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
         wm_rect_t rb = {btn_right - 70, footer.y + 10, 32u, 32u};
         wm_canvas_fill_rounded(canvas, rb, 16u, state->theme.surface_hover);
         wm_canvas_fill_rounded(canvas, sd, 16u, state->theme.surface_hover);
-        wm_canvas_draw_icon(canvas,
-            (wm_rect_t){rb.x+7, rb.y+7, 18u, 18u},
-            &state->assets.system_icons.reboot, 220u, 2u, state->theme.text);
-        wm_canvas_draw_icon(canvas,
-            (wm_rect_t){sd.x+7, sd.y+7, 18u, 18u},
-            &state->assets.system_icons.power, 220u, 2u, state->theme.danger);
+        wm_icon_draw(canvas, (wm_rect_t){rb.x+6, rb.y+6, 20u, 20u},
+                     WM_ICON_RESTART, state->theme.text);
+        wm_icon_draw(canvas, (wm_rect_t){sd.x+6, sd.y+6, 20u, 20u},
+                     WM_ICON_POWER, state->theme.danger);
     }
 }
 
