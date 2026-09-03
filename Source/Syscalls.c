@@ -336,6 +336,27 @@ int32_t os_memfd_shm_handle(int32_t fd)
                              (uint64_t)(int64_t)fd);
 }
 
+/* ---- Foreign-server bring-up helpers ------------------------------------ */
+
+int32_t unix_socket_is_listening(const char *path)
+{
+    if (path == NULL) return 0;
+    return (int32_t)syscall1(SYSCALL_UNIX_LISTENING,
+                             (uint64_t)(uintptr_t)path);
+}
+
+int32_t display_kms_set_mirror(void *pixels, uint32_t width, uint32_t height)
+{
+    return (int32_t)syscall3(SYSCALL_DISPLAY_KMS_MIRROR,
+                             (uint64_t)(uintptr_t)pixels,
+                             (uint64_t)width, (uint64_t)height);
+}
+
+int32_t display_kms_mirror_take_dirty(void)
+{
+    return (int32_t)syscall0(SYSCALL_DISPLAY_KMS_MIRROR_DIRTY);
+}
+
 signal_handler_t os_signal(int32_t signum, signal_handler_t handler)
 {
     uint64_t raw = syscall2(SYSCALL_PROCESS_SIGNAL,
@@ -1549,7 +1570,12 @@ int32_t tcp_get_state(int32_t conn_id)
 
 int32_t process_kill(int32_t pid)
 {
-    return (int32_t)syscall1(SYSCALL_TKILL_NUM, (uint64_t)(int64_t)pid);
+    /* SYSCALL_TKILL takes (pid, signum). syscall1() leaves the signum
+     * register holding whatever the caller happened to have there, and the
+     * kernel used it verbatim -- that is how killing Xorg once arrived as a
+     * SIGQUIT. Ask for SIGKILL explicitly. */
+    return (int32_t)syscall2(SYSCALL_TKILL_NUM, (uint64_t)(int64_t)pid,
+                             9ULL /* SIGKILL */);
 }
 
 #define SYSCALL_SET_PROCESS_PRIORITY_NUM 236ULL

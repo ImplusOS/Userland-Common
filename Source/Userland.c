@@ -1133,7 +1133,7 @@ void _start(void) {
             spawn_with_fallbacks(sysnotif_paths, 1);
         }
     }
-
+    
     if (g_bg_cache) {
         free(g_bg_cache);
         g_bg_cache = NULL;

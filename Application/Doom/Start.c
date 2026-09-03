@@ -1,7 +1,12 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "Process.h"
+#include "Window.h"
+#include "Graphics.h"
+#include "Socket.h"
+#include "Serial.h"
 
 /*
  * Doom ランチャ（方法A: TODO_Doom_Xorg_MethodA.md）。
@@ -18,6 +23,14 @@
  *     XOpenDisplay(NULL) がそのまま失敗する（"Couldn't connect to display!"）。
  *   - DOOMWADDIR … Doom は未設定だと "." を見る。カーネルは Linux ELF の cwd を
  *     実行体のあるディレクトリに設定するので、どちらでも Resource/doom1.wad が拾われる。
+ *
+ * このランチャは X を「ウィンドウの中で」動かす。X は本来 /dev/dri/card0 へ
+ * スキャンアウトしてパネルを占有するが、それはウィンドウマネージャが持って
+ * いる同じフレームバッファなので、両方を同時に動かすと後に present した方が
+ * 勝ち、二つの無関係なデスクトップが交互に表示される（＝WM が起動していない
+ * ように見える／黒画面）。そこで自前で普通の WM ウィンドウを作り、その
+ * バッキングストアを KMS のスキャンアウト先として登録する（display_kms_set_mirror）。
+ * 以後 X のフレームはそのサーフェスに入り、WM が他のアプリと同様に合成する。
  */
 #define XORG_PATH  "/usr/bin/Xorg"
 /* -logfile /dev/tty routes the whole X log to COM1 (DevFS /dev/tty -> serial)
@@ -39,71 +52,143 @@
  * and lastfdesc is pinned to the compile-time MAXCLIENTS of 256 -- "-maxclients"
  * does not move it, which was measured. AF_UNIX fds were therefore moved below
  * 256; see OS_CONFIG_FILE_MAX_FD and TODO_Doom_Xorg_MethodA.md M22.) */
-/* "-dumbSched": run input on the main loop instead of X's separate input
- * thread (and drop the SIGALRM smart scheduler with it). X's InputThread died
- * on a #GP the moment it started -- "[OS] [#GP] ... name=InputThread rip=
- * 0x6E672D78756E696C" -- and taking the server down with it. The rip there is
- * ASCII ("linux-gn"), so the thread returned into string data: a kernel
- * threading bug that is tracked separately (TODO_Doom_Xorg_MethodA.md M18).
- * -dumbSched is a supported X option for exactly this situation, not a
- * workaround for something X does wrong; remove it once threads are sound. */
+/* No "-verbose 3 -logverbose 3": every X log line is written twice (once for
+ * stderr, once for -logfile) and COM1 is driven a character at a time from
+ * inside the syscall path, so raising the level from the default cost several
+ * seconds of pure serial time before the first frame. Raise it again for a
+ * bring-up boot, together with OS_CONFIG_FOREIGN_TRACE. */
 #define XORG_ARGS  ":0 -config /etc/X11/xorg.conf -nolisten tcp -novtswitch " \
                    "-keeptty +iglx -dumbSched -ac " \
-                   "-logfile /dev/tty -verbose 3 -logverbose 3"
+                   "-logfile /dev/tty"
 
 #define DOOM_PATH  "/Userland/Doom/Resource/linuxxdoom-x86_64"
 
-/* Xorg が /tmp/.X11-unix/X0 を bind し accept を回し始めるまでの猶予。
- * Xlib 側も接続を数回リトライするため、厳密なハンドシェイクは省く。 */
-/* Doom is launched this long after the launcher starts, i.e. after userland
- * init has brought the launcher up. Xorg needs the head of this window to
- * reach its accept loop before linuxxdoom calls XOpenDisplay(":0"). */
-#define XORG_SETTLE_MS  15000u
+/* The socket Xorg binds once it is ready to accept clients. */
+#define X_SOCKET_PATH "/tmp/.X11-unix/X0"
 
-/* DIAGNOSTIC (TODO_Doom_Xorg_MethodA.md M6): X dies at "Initializing extension
- * GLX" with "libglx.so: undefined symbol: <name>" and the name is raced off the
- * shared COM1 by linuxxdoom's startup banner every time. For this bring-up pass
- * run ONLY Xorg and wait on it, so the serial console is uncontended and the
- * full symbol name (plus any LD_WARN lines) is legible. Restore the Doom spawn
- * once X reaches its screen. */
-/* Back to 0: with LD_BIND_NOW=1 + LD_WARN=1 any libglx.so symbol miss is now
- * reported by name at *load* time (~t+1s), well before this launcher's
- * XORG_SETTLE_MS elapses, so linuxxdoom's banner no longer races it. If X
- * reaches its screen, Doom then runs for real. */
+/* Upper bound on the wait for Xorg to reach its accept loop. This is a
+ * timeout, not a delay: the wait ends as soon as the socket is listening.
+ * The old code slept a fixed 60 s here because the true figure is wildly
+ * load-dependent (Xorg dynamic-links ~40 shared objects and runs xkbcomp
+ * twice), and 60 s was then paid in full on every boot. */
+#define XORG_READY_TIMEOUT_MS  120000u
+#define XORG_POLL_INTERVAL_MS  50u
+
+/* Size of the window Xorg renders into. The KMS shim advertises this as the
+ * connector's only mode, so X comes up at exactly this size. Kept below the
+ * 1280x800 panel so the window, its decorations and the taskbar all fit. */
+#define X_WINDOW_W 1024u
+#define X_WINDOW_H 640u
+
+/* DIAGNOSTIC (TODO_Doom_Xorg_MethodA.md M6): run only Xorg and wait on it, so
+ * the serial console is uncontended while a server-side failure is chased. */
 #define DOOM_DIAGNOSTIC_XORG_ONLY 0
+
+/* Wait until `pid` is a reaped zombie. The native process_waitpid() never
+ * blocks: it reports 0 while the child still runs (WNOHANG semantics) and
+ * only returns the pid once the child has exited. A single call therefore
+ * returns immediately, which is what used to tear Xorg down the instant Doom
+ * started -- "Couldn't connect to display!". */
+static int32_t wait_for_exit(int32_t pid, window_id_t win,
+                             uint32_t win_w, uint32_t win_h, int mirrored)
+{
+    int32_t status = 0;
+    for (;;) {
+        int32_t reaped = process_waitpid(pid, &status, 0);
+        if (reaped == pid) break;   /* exited, status valid */
+        if (reaped < 0) break;      /* no such child */
+        /* Repaint only when the redirected server actually produced a frame;
+         * polling the flag is far cheaper than damaging the whole window at a
+         * fixed rate, and X is idle most of the time during startup. */
+        if (mirrored && display_kms_mirror_take_dirty()) {
+            window_damage(win, 0u, 0u, win_w, win_h);
+        }
+        sleep_ms(mirrored ? 16u : 200u);
+    }
+    return status;
+}
 
 void _start(void)
 {
+    /* Host X inside a window when there is a compositor to host it. Without
+     * one (early bring-up, or a WM that failed to start) fall back to letting
+     * X own the panel, which is the only way anything is visible at all. */
+    window_id_t win = 0u;
+    uint32_t win_w = 0u, win_h = 0u;
+    int mirrored = 0;
+
+    if (window_get_wm_pid() >= 0) {
+        win = window_create(X_WINDOW_W, X_WINDOW_H, "Doom (X11)");
+        if (win != 0u) {
+            uint32_t *pixels = window_get_backing_store(win, &win_w, &win_h);
+            if (pixels != NULL && win_w != 0u && win_h != 0u &&
+                display_kms_set_mirror(pixels, win_w, win_h) == 0) {
+                mirrored = 1;
+                /* The backing store starts fully transparent, and X only ever
+                 * writes RGB -- it never sets an alpha byte -- so without
+                 * this the compositor blends every frame against the
+                 * wallpaper and the window reads as an empty pane. */
+                (void)window_set_surface_opaque(win, true);
+                window_show(win);
+                window_raise(win);
+                serial_write_string("[doom] X redirected into a window\n");
+            } else {
+                /* Leave the window up: it is where any error text goes, and
+                 * destroying it would flash the desktop. */
+                serial_write_string("[doom] window mirror unavailable, "
+                                    "X will scan out to the panel\n");
+            }
+        }
+    }
+
     int32_t xpid = process_spawn_with_arg(XORG_PATH, XORG_ARGS);
+
+    /* Wait for the accept loop rather than for a guessed interval. The
+     * elapsed figure is logged because it is the number to watch when
+     * changing anything that touches foreign-process startup -- it is where
+     * essentially all of the pre-first-frame time goes. */
+    if (xpid > 0) {
+        uint64_t t0 = get_uptime_ms();
+        uint32_t waited = 0u;
+        int ready = 0;
+        while (waited < XORG_READY_TIMEOUT_MS) {
+            if (unix_socket_is_listening(X_SOCKET_PATH) > 0) { ready = 1; break; }
+            sleep_ms(XORG_POLL_INTERVAL_MS);
+            waited += XORG_POLL_INTERVAL_MS;
+        }
+        char msg[96];
+        snprintf(msg, sizeof msg, "[doom] Xorg %s after %lu ms\n",
+                 ready ? "ready" : "TIMED OUT",
+                 (unsigned long)(get_uptime_ms() - t0));
+        serial_write_string(msg);
+    }
 
 #if DOOM_DIAGNOSTIC_XORG_ONLY
     if (xpid > 0) {
-        int32_t st = 0;
-        (void)process_waitpid(xpid, &st, 0);
+        (void)wait_for_exit(xpid, win, win_w, win_h, mirrored);
     }
+    (void)display_kms_set_mirror(0, 0u, 0u);
     process_exit(0);
 #else
-    if (xpid < 0) {
-        /* Xorg が起動できない環境（KMS shim 未接続など）。Doom 単体でも
-         * ld.so 依存解決までは進むので、そのまま試す。 */
-        (void)0;
-    } else {
-        sleep_ms(XORG_SETTLE_MS);
-    }
-
     int32_t pid = process_spawn(DOOM_PATH);
     if (pid < 0) {
         if (xpid > 0) {
             (void)process_kill(xpid);
         }
+        (void)display_kms_set_mirror(0, 0u, 0u);
         process_exit(1);
     }
 
-    int32_t status = 0;
-    (void)process_waitpid(pid, &status, 0);
+    int32_t status = wait_for_exit(pid, win, win_w, win_h, mirrored);
 
     if (xpid > 0) {
         (void)process_kill(xpid);
+    }
+    /* Hand the panel back before leaving, or the next flip from a lingering
+     * server would write into a surface this process no longer owns. */
+    (void)display_kms_set_mirror(0, 0u, 0u);
+    if (win != 0u) {
+        window_destroy(win);
     }
     process_exit(status);
 #endif
