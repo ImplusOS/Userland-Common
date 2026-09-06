@@ -6,8 +6,8 @@ TOP_BUILD_DIR ?= ../../../Build/$(ARCH)
 BUILD_DIR := $(TOP_BUILD_DIR)/Userland/$(APP_NAME)
 ELF      := $(BUILD_DIR)/$(APP_NAME).ELF
 
-# Tests/ holds the host-side harness (see Tests/README.md); it is built by
-# gcc for the build machine, never cross-compiled into the ELF.
+# Tests/ holds the host-side harness (see Tests/README.md); it builds with
+# the host gcc, not the cross toolchain, so keep it out of the app link.
 APP_SRC := $(shell find $(SRC_DIR) -name '*.c' -not -path './Tests/*')
 APP_OBJS := $(APP_SRC:%.c=$(BUILD_DIR)/%.o)
 
@@ -17,22 +17,22 @@ OBJS := $(APP_OBJS) $(COMMON_OBJS)
 
 CFLAGS := -ffreestanding -fno-stack-protector -fno-pic -fno-builtin \
           $(ARCH_CFLAGS) -nostdlib -nostartfiles -nodefaultlibs \
+          -I. \
           -I../../../libc/I_libc/Source/include -I../../../libc/I_libc/Source/include/sys \
           -I../../Source \
           -I../../API/Source \
-          $(WLC_EXTRA_CFLAGS) \
-          -Wall -Wextra -Wtype-limits -Wshadow -MMD -MP
-LDFLAGS := -T ../../Source/Userland.ld -e _start -nostdlib --build-id=none
+          -I../../../Library/Source \
+          -I../../../Vendor \
+          -Wall -Wextra -Wtype-limits -Wconversion -Wsign-conversion -Wshadow -MMD -MP \
+          -O2 -ffunction-sections -fdata-sections
+LDFLAGS := -T ../../Source/Userland.ld -e _start -nostdlib --build-id=none --gc-sections
 
 RESOURCE_DIR := Resource
 
 all: $(ELF) copy_resources
 
 copy_resources:
-	@if [ -d $(RESOURCE_DIR) ]; then \
-		mkdir -p $(BUILD_DIR); \
-		cp -a $(RESOURCE_DIR) $(BUILD_DIR)/; \
-	fi
+	@if [ -d $(RESOURCE_DIR) ]; then mkdir -p $(BUILD_DIR); cp -a $(RESOURCE_DIR) $(BUILD_DIR)/; fi
 
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)

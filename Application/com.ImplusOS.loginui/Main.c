@@ -601,8 +601,13 @@ static void start_session(const char *username, uint32_t uid) {
     { char b[48]; snprintf(b, sizeof(b), "[loginui] wm spawn -> %d\n", (int)wm);
       serial_write_string(b); }
 
+    /* Wait for the window manager to register, up to a minute. This is a
+     * timeout, not a delay -- it ends the moment the WM is up. The old 6 s
+     * was a guess that a cold boot off the ISO exceeds often enough to
+     * matter, and every time it did the session came up with no notification
+     * daemon and no way to tell why. */
     int32_t wm_pid = -1;
-    for (int i = 0; i < 300; ++i) {
+    for (int i = 0; i < 3000; ++i) {
         wm_pid = window_get_wm_pid();
         if (wm_pid >= 0) break;
         sleep_ms(20);

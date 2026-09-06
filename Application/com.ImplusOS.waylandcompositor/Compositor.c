@@ -1,549 +1,675 @@
 /*
- * com.ImplusOS.waylandcompositor - a minimal Wayland compositor for ImplusOS.
+ * Scene, output, input and main loop.
  *
- * It speaks the Wayland wire protocol by hand (no libwayland) over an AF_UNIX
- * socket at $XDG_RUNTIME_DIR/wayland-0 (= /tmp/wayland-0), and bridges one
- * client's committed wl_shm surface into a single ImplusOS window-manager
- * window (Window.h backing store).
+ * The Wayland protocol lives in Wayland.c and knows nothing about how
+ * pixels reach the screen or where input comes from. This file supplies
+ * both, in either of two backends chosen at startup:
  *
- * Scope (first light): wl_display / wl_registry / wl_callback, wl_compositor,
- * wl_shm (+pool+buffer), wl_surface (attach/damage/frame/commit), xdg_wm_base
- * / xdg_surface / xdg_toplevel, plus stub wl_seat (no caps), wl_output,
- * wl_subcompositor and wl_data_device_manager so GTK3's Wayland backend gets
- * far enough to map and present a window. Input is not wired yet.
+ *   panel  -- no window manager is running. The compositor claims the raw
+ *             HID stream (which is also what makes it the kernel's input
+ *             owner, the same claim com.ImplusOS.windowmanager makes) and
+ *             scans out to the panel framebuffer. A Wayland session then
+ *             needs nothing else in userland.
+ *   hosted -- a window manager is running and owns the panel. The whole
+ *             Wayland output becomes one WM window, and input arrives
+ *             through the WM's routing, already in window coordinates.
  *
- * Design notes:
- *  - one client connection at a time (GTK).
- *  - object ids: client-allocated < 0xff000000, server-allocated from
- *    0xff000000 up. obj[] is a flat table indexed by id (client ids only;
- *    server ids tracked separately and small in number).
- *  - the only client->server fd is wl_shm.create_pool's; received fds are
- *    queued in g_rx_fds and consumed when that request is parsed.
+ * Selected automatically, or forced with a launch argument: "panel" or
+ * "hosted".
  */
 
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 
+#include "Compositor.h"
 #include "Process.h"
-#include "Window.h"
+#include "Graphics.h"
+#include "Input.h"
 #include "Memory.h"
+#include "Serial.h"
 
 extern uint64_t syscall1(uint64_t, uint64_t);
 extern uint64_t syscall2(uint64_t, uint64_t, uint64_t);
-extern uint64_t syscall3(uint64_t, uint64_t, uint64_t, uint64_t);
 
-/* --- native syscall numbers (mirror Kernel/Core/syscall/Syscall_Main.h) --- */
 #define SYS_UNIX_SOCKET   220
 #define SYS_UNIX_BIND     221
 #define SYS_UNIX_LISTEN   222
 #define SYS_UNIX_ACCEPT   223
-#define SYS_UNIX_CONNECT  224
-#define SYS_UNIX_SEND     225
-#define SYS_UNIX_RECV     226
-#define SYS_UNIX_RECVMSG  228
-#define SYS_UNIX_CLOSE    229
 
-static int u_socket(void)            { return (int)syscall1(SYS_UNIX_SOCKET, 1); }
-static int u_bind(int fd, const char *p){ return (int)syscall2(SYS_UNIX_BIND, (uint64_t)fd, (uint64_t)(uintptr_t)p); }
-static int u_listen(int fd)           { return (int)syscall2(SYS_UNIX_LISTEN, (uint64_t)fd, 8); }
-static int u_accept(int fd)           { return (int)syscall1(SYS_UNIX_ACCEPT, (uint64_t)fd); }
-static int u_send(int fd, const void *b, uint32_t n){ return (int)syscall3(SYS_UNIX_SEND, (uint64_t)fd, (uint64_t)(uintptr_t)b, n); }
-static void dbg(const char *s){ syscall1(2 /*SYSCALL_SERIAL_PUTS*/, (uint64_t)(uintptr_t)s); }
+#define WL_SOCK_PATH   "/tmp/wayland-0"
+#define FRAME_MS       16u          /* ~60 Hz ceiling on recomposites */
+#define IDLE_NAP_MS    4u
 
-/* struct msghdr, x86-64 glibc layout (Kernel/IPC/UnixSocket.c) */
-struct msghdr_k {
-    uint64_t name; uint32_t namelen; uint32_t _p0;
-    uint64_t iov;  uint64_t iovlen;
-    uint64_t control; uint64_t controllen;
-    int32_t flags; uint32_t _p1;
-};
-struct iovec_k { uint64_t base; uint64_t len; };
-struct cmsghdr_k { uint32_t len; uint32_t _pad; int32_t level; int32_t type; };
+/* ---- shared state ---------------------------------------------------- */
+wlc_window_t g_windows[WLC_MAX_WINDOWS];
+int32_t      g_zorder[WLC_MAX_WINDOWS];
+uint32_t     g_zcount;
+wlc_output_t g_out;
+bool         g_dirty;
+
+/* ---- logging --------------------------------------------------------- */
+void wlc_log(const char *s) { serial_write_string(s); }
+
+void wlc_logf_u32(const char *prefix, uint32_t value)
+{
+    serial_write_string(prefix);
+    serial_write_uint32(value);
+    serial_write_string("\n");
+}
+
+/* Same, without the newline, for building one line out of several fields. */
+void wlc_log_u32(const char *prefix, uint32_t value)
+{
+    serial_write_string(prefix);
+    serial_write_uint32(value);
+}
+
+uint32_t wlc_now_ms(void) { return (uint32_t)get_uptime_ms(); }
 
 /* ------------------------------------------------------------------ */
+/* scene                                                                */
+/* ------------------------------------------------------------------ */
 
-#define WL_SOCK_PATH "/tmp/wayland-0"
-#define RX_CAP   (256 * 1024)
-#define TX_CAP   (64 * 1024)
-#define MAX_ID   0x4000u          /* client id table size */
-#define SERVER_ID_BASE 0xff000000u
+static void zorder_remove(int32_t index)
+{
+    uint32_t out = 0;
+    for (uint32_t i = 0; i < g_zcount; i++) {
+        if (g_zorder[i] != index) g_zorder[out++] = g_zorder[i];
+    }
+    g_zcount = out;
+}
 
-enum {
-    O_NONE = 0, O_DISPLAY, O_REGISTRY, O_CALLBACK, O_COMPOSITOR, O_SHM,
-    O_SHM_POOL, O_BUFFER, O_SURFACE, O_REGION, O_XDG_WM_BASE, O_XDG_SURFACE,
-    O_XDG_TOPLEVEL, O_SEAT, O_POINTER, O_KEYBOARD, O_OUTPUT, O_SUBCOMPOSITOR,
-    O_SUBSURFACE, O_DDM, O_DATA_DEVICE, O_DATA_SOURCE, O_POSITIONER
+void wlc_window_raise(int32_t index)
+{
+    if (index < 0 || (uint32_t)index >= WLC_MAX_WINDOWS) return;
+    zorder_remove(index);
+    if (g_zcount < WLC_MAX_WINDOWS) g_zorder[g_zcount++] = index;
+    g_dirty = true;
+}
+
+int32_t wlc_window_alloc(wlc_client_t *c, uint32_t surface, uint32_t xdg_surface)
+{
+    for (uint32_t i = 0; i < WLC_MAX_WINDOWS; i++) {
+        if (g_windows[i].used) continue;
+        wlc_window_t *w = &g_windows[i];
+        uint32_t *keep = w->pixels;
+        uint32_t keep_cap = w->pix_cap;
+        memset(w, 0, sizeof(*w));
+        w->pixels = keep;              /* reuse the slot's allocation */
+        w->pix_cap = keep_cap;
+        w->used = true;
+        w->client = c;
+        w->surface = surface;
+        w->xdg_surface = xdg_surface;
+        wlc_window_raise((int32_t)i);
+        return (int32_t)i;
+    }
+    return -1;
+}
+
+void wlc_window_free(int32_t index)
+{
+    if (index < 0 || (uint32_t)index >= WLC_MAX_WINDOWS) return;
+    if (!g_windows[index].used) return;
+
+    zorder_remove(index);
+    g_windows[index].used = false;
+    g_windows[index].mapped = false;
+    g_windows[index].client = NULL;
+    g_windows[index].surface = 0u;
+    g_windows[index].w = g_windows[index].h = 0u;
+
+    /* The pixel buffer stays allocated for the next window in this slot. */
+    wlc_seat_pointer_leave_all();
+    wlc_seat_refresh_focus();
+    g_dirty = true;
+}
+
+/* Toplevels are centred, then cascaded so a second window does not land
+ * exactly on the first. Popups are positioned by their xdg_positioner and
+ * skip this. */
+void wlc_window_place(int32_t index)
+{
+    static uint32_t cascade;
+    wlc_window_t *w = &g_windows[index];
+    if (w->popup) return;
+
+    int32_t step = (int32_t)((cascade % 6u) * 32u);
+    cascade++;
+
+    w->x = ((int32_t)g_out.w - (int32_t)w->w) / 2 + step;
+    w->y = ((int32_t)g_out.h - (int32_t)w->h) / 2 + step;
+    if (w->x + (int32_t)w->w > (int32_t)g_out.w)
+        w->x = (int32_t)g_out.w - (int32_t)w->w;
+    if (w->y + (int32_t)w->h > (int32_t)g_out.h)
+        w->y = (int32_t)g_out.h - (int32_t)w->h;
+    if (w->x < 0) w->x = 0;
+    if (w->y < 0) w->y = 0;
+}
+
+int32_t wlc_window_at(int32_t x, int32_t y, int32_t *out_local_x,
+                      int32_t *out_local_y)
+{
+    for (uint32_t i = g_zcount; i > 0u; i--) {
+        int32_t index = g_zorder[i - 1u];
+        wlc_window_t *w = &g_windows[index];
+        if (!w->used || !w->mapped || !w->w || !w->h) continue;
+        if (x < w->x || y < w->y) continue;
+        if (x >= w->x + (int32_t)w->w || y >= w->y + (int32_t)w->h) continue;
+        if (out_local_x) *out_local_x = x - w->x;
+        if (out_local_y) *out_local_y = y - w->y;
+        return index;
+    }
+    return -1;
+}
+
+int32_t wlc_window_focus_candidate(void)
+{
+    for (uint32_t i = g_zcount; i > 0u; i--) {
+        int32_t index = g_zorder[i - 1u];
+        if (g_windows[index].used && g_windows[index].mapped) return index;
+    }
+    return -1;
+}
+
+void wlc_damage_all(void) { g_dirty = true; }
+
+/* ------------------------------------------------------------------ */
+/* compositing                                                          */
+/* ------------------------------------------------------------------ */
+
+/* Source-over with premultiplied alpha, which is what wl_shm ARGB8888 is.
+ * XRGB buffers were forced opaque on the way in, so they take the fast
+ * path. */
+static inline uint32_t blend(uint32_t src, uint32_t dst)
+{
+    uint32_t a = src >> 24;
+    if (a == 0xffu) return src;
+    if (a == 0u) return dst;
+    uint32_t ia = 255u - a;
+    uint32_t rb = ((((dst & 0x00ff00ffu) * ia) >> 8) & 0x00ff00ffu);
+    uint32_t g  = ((((dst & 0x0000ff00u) * ia) >> 8) & 0x0000ff00u);
+    return src + rb + g;
+}
+
+static void paint_background(uint32_t *dst)
+{
+    /* A quiet vertical gradient, so an empty session reads as "running"
+     * rather than "the screen is broken". */
+    for (uint32_t y = 0; y < g_out.h; y++) {
+        uint32_t t = (g_out.h > 1u) ? (y * 255u) / (g_out.h - 1u) : 0u;
+        uint32_t r = 0x14u + (0x08u * t) / 255u;
+        uint32_t g = 0x18u + (0x0au * t) / 255u;
+        uint32_t b = 0x1eu + (0x10u * t) / 255u;
+        uint32_t c = 0xff000000u | (r << 16) | (g << 8) | b;
+        uint32_t *row = dst + (size_t)y * g_out.w;
+        for (uint32_t x = 0; x < g_out.w; x++) row[x] = c;
+    }
+}
+
+static void paint_window(uint32_t *dst, const wlc_window_t *w)
+{
+    if (!w->pixels || !w->w || !w->h) return;
+
+    int32_t x0 = w->x < 0 ? 0 : w->x;
+    int32_t y0 = w->y < 0 ? 0 : w->y;
+    int32_t x1 = w->x + (int32_t)w->w;
+    int32_t y1 = w->y + (int32_t)w->h;
+    if (x1 > (int32_t)g_out.w) x1 = (int32_t)g_out.w;
+    if (y1 > (int32_t)g_out.h) y1 = (int32_t)g_out.h;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    for (int32_t y = y0; y < y1; y++) {
+        const uint32_t *s = w->pixels + (size_t)(y - w->y) * w->w + (size_t)(x0 - w->x);
+        uint32_t *d = dst + (size_t)y * g_out.w + (size_t)x0;
+        for (int32_t x = x0; x < x1; x++) {
+            *d = blend(*s, *d);
+            ++s; ++d;
+        }
+    }
+}
+
+/* The pointer sprite. There is no WM to draw one in panel mode, and a
+ * Wayland client's own cursor surface is not composited, so this is the
+ * only cursor the session has. */
+static const char *const k_cursor[] = {
+    "X          ",
+    "XX         ",
+    "XoX        ",
+    "XooX       ",
+    "XoooX      ",
+    "XooooX     ",
+    "XoooooX    ",
+    "XooooooX   ",
+    "XoooooooX  ",
+    "XooooooooX ",
+    "XoooooXXXXX",
+    "XooXooX    ",
+    "XoX XooX   ",
+    "XX  XooX   ",
+    "X    XooX  ",
+    "     XooX  ",
+    "      XXX  ",
 };
+#define CURSOR_H ((int32_t)(sizeof(k_cursor) / sizeof(k_cursor[0])))
 
-typedef struct {
-    uint8_t  type;
-    /* wl_shm_pool */
-    uint8_t *pool_base;
-    uint32_t pool_size;
-    int32_t  pool_handle;
-    /* wl_buffer */
-    uint32_t b_pool;      /* pool object id */
-    uint32_t b_off, b_w, b_h, b_stride, b_fmt;
-    /* wl_surface */
-    uint32_t s_pending_buf, s_current_buf, s_frame_cb, s_xdg;
-    /* xdg_surface */
-    uint32_t x_surface, x_toplevel, x_serial;
-} obj_t;
+static int32_t g_ptr_x, g_ptr_y;
 
-static obj_t   g_obj[MAX_ID];
-static int     g_client = -1;
-static uint32_t g_next_serial = 1;
-
-static uint8_t g_rx[RX_CAP];
-static uint32_t g_rxlen = 0;
-static int32_t g_rx_fds[16];
-static uint32_t g_rx_fd_head = 0, g_rx_fd_tail = 0;
-
-static uint8_t g_tx[TX_CAP];
-
-static window_id_t g_win = 0;
-static uint32_t   *g_winpx = NULL;
-static uint32_t    g_win_w = 0, g_win_h = 0;
-
-/* ---- object helpers ---- */
-static obj_t *obj(uint32_t id) { return (id && id < MAX_ID) ? &g_obj[id] : NULL; }
-static void obj_set(uint32_t id, uint8_t t) { if (id && id < MAX_ID) { memset(&g_obj[id], 0, sizeof(obj_t)); g_obj[id].type = t; } }
-
-/* ---- wire writers ---- */
-static void w_u32(uint8_t *p, uint32_t v) { p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24; }
-static uint32_t r_u32(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24); }
-
-/* Build+send one event: object id, opcode, then `argc` u32 args (ints/uints/
- * objects/new_ids). Strings/arrays are not needed for the events we emit
- * except wl_registry.global, which has its own path below. */
-static void ev(uint32_t id, uint16_t op, const uint32_t *args, uint32_t argc)
+static void paint_cursor(uint32_t *dst)
 {
-    uint32_t size = 8 + argc * 4;
-    uint8_t m[8 + 16 * 4];
-    w_u32(m, id);
-    w_u32(m + 4, ((uint32_t)size << 16) | op);
-    for (uint32_t i = 0; i < argc; i++) w_u32(m + 8 + i * 4, args[i]);
-    if (g_client >= 0) u_send(g_client, m, size);
-}
-
-/* wl_registry.global(name, interface, version) */
-static void ev_global(uint32_t reg, uint32_t name, const char *iface, uint32_t version)
-{
-    uint32_t ilen = (uint32_t)strlen(iface) + 1;
-    uint32_t ipad = (ilen + 3) & ~3u;
-    uint32_t size = 8 + 4 + 4 + ipad + 4;
-    uint8_t *m = g_tx;
-    w_u32(m, reg);
-    w_u32(m + 4, (size << 16) | 0 /*global*/);
-    w_u32(m + 8, name);
-    w_u32(m + 12, ilen);
-    memset(m + 16, 0, ipad);
-    memcpy(m + 16, iface, strlen(iface));
-    w_u32(m + 16 + ipad, version);
-    if (g_client >= 0) u_send(g_client, m, size);
-}
-
-__attribute__((unused)) static void wl_display_error(uint32_t bad, uint32_t code, const char *msg)
-{
-    uint32_t mlen = (uint32_t)strlen(msg) + 1, mpad = (mlen + 3) & ~3u;
-    uint32_t size = 8 + 4 + 4 + 4 + mpad;
-    uint8_t *m = g_tx;
-    w_u32(m, 1); w_u32(m + 4, (size << 16) | 0);
-    w_u32(m + 8, bad); w_u32(m + 12, code); w_u32(m + 16, mlen);
-    memset(m + 20, 0, mpad); memcpy(m + 20, msg, strlen(msg));
-    if (g_client >= 0) u_send(g_client, m, size);
-    dbg("[wl] protocol error sent\n");
-}
-
-static void wl_delete_id(uint32_t id)
-{
-    uint32_t a[1] = { id };
-    ev(1, 1 /*delete_id*/, a, 1);
-}
-
-/* ---- registry globals ---- */
-struct global { uint32_t name; const char *iface; uint32_t version; };
-static const struct global G[] = {
-    { 1, "wl_compositor",           4 },
-    { 2, "wl_shm",                  1 },
-    { 3, "wl_subcompositor",        1 },
-    { 4, "xdg_wm_base",             3 },
-    { 5, "wl_seat",                 7 },
-    { 6, "wl_output",               3 },
-    { 7, "wl_data_device_manager",  3 },
-};
-#define NGLOBAL (sizeof(G) / sizeof(G[0]))
-
-static void send_shm_formats(uint32_t shm)
-{
-    uint32_t a0[1] = { 0 }; ev(shm, 0 /*format*/, a0, 1);   /* ARGB8888 */
-    uint32_t a1[1] = { 1 }; ev(shm, 0, a1, 1);              /* XRGB8888 */
-}
-
-static void send_output_info(uint32_t out)
-{
-    /* geometry(x,y,pw,ph,subpixel,make,model,transform) - make/model strings */
-    const char *mk = "ImplusOS", *md = "Wayland";
-    uint32_t mkl = 9, mkp = 12, mdl = 8, mdp = 8;
-    uint8_t *m = g_tx;
-    uint32_t size = 8 + 4*4 + 4 + (4 + mkp) + (4 + mdp) + 4;
-    uint32_t o = 0;
-    w_u32(m + o, out); o += 4;
-    w_u32(m + o, (size << 16) | 0 /*geometry*/); o += 4;
-    w_u32(m + o, 0); o += 4; w_u32(m + o, 0); o += 4;      /* x,y */
-    w_u32(m + o, 300); o += 4; w_u32(m + o, 200); o += 4;  /* phys mm */
-    w_u32(m + o, 0); o += 4;                                /* subpixel unknown */
-    w_u32(m + o, mkl); o += 4; memset(m + o, 0, mkp); memcpy(m + o, mk, 8); o += mkp;
-    w_u32(m + o, mdl); o += 4; memset(m + o, 0, mdp); memcpy(m + o, md, 7); o += mdp;
-    w_u32(m + o, 0); o += 4;                                /* transform normal */
-    if (g_client >= 0) u_send(g_client, m, size);
-
-    uint32_t mode[4] = { 0x1 /*current*/, (uint32_t)(g_win_w ? g_win_w : 900),
-                         (uint32_t)(g_win_h ? g_win_h : 700), 60000 };
-    ev(out, 1 /*mode*/, mode, 4);
-    uint32_t sc[1] = { 1 }; ev(out, 3 /*scale*/, sc, 1);
-    ev(out, 2 /*done*/, NULL, 0);
-}
-
-/* ---- blit a committed wl_shm buffer into the WM window ---- */
-static void present_buffer(uint32_t bufid)
-{
-    obj_t *b = obj(bufid);
-    if (!b || b->type != O_BUFFER) return;
-    obj_t *pool = obj(b->b_pool);
-    if (!pool || pool->type != O_SHM_POOL || !pool->pool_base) return;
-    if ((uint64_t)b->b_off + (uint64_t)b->b_stride * b->b_h > pool->pool_size) return;
-
-    if (!g_winpx) return;
-
-    const uint8_t *src = pool->pool_base + b->b_off;
-    uint32_t rows = b->b_h < g_win_h ? b->b_h : g_win_h;
-    uint32_t cols = b->b_w < g_win_w ? b->b_w : g_win_w;
-    for (uint32_t y = 0; y < rows; y++) {
-        const uint32_t *s = (const uint32_t *)(src + (size_t)y * b->b_stride);
-        uint32_t *d = g_winpx + (size_t)y * g_win_w;
-        for (uint32_t x = 0; x < cols; x++) {
-            uint32_t px = s[x];
-            if (b->b_fmt == 1) px |= 0xff000000u;   /* XRGB -> opaque */
-            d[x] = px;
+    for (int32_t row = 0; row < CURSOR_H; row++) {
+        int32_t y = g_ptr_y + row;
+        if (y < 0 || y >= (int32_t)g_out.h) continue;
+        const char *line = k_cursor[row];
+        for (int32_t col = 0; line[col]; col++) {
+            int32_t x = g_ptr_x + col;
+            if (x < 0 || x >= (int32_t)g_out.w) continue;
+            if (line[col] == 'X')      dst[(size_t)y * g_out.w + (size_t)x] = 0xff000000u;
+            else if (line[col] == 'o') dst[(size_t)y * g_out.w + (size_t)x] = 0xffffffffu;
         }
     }
-    window_damage(g_win, 0, 0, cols, rows);
-    window_end_transaction(g_win);
 }
 
-/* ---- request dispatch ---- */
-static void req_display(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
+static void compose(void)
 {
-    (void)id;
-    if (op == 0) {                       /* sync(callback) */
-        if (n < 4) return;
-        uint32_t cb = r_u32(a);
-        obj_set(cb, O_CALLBACK);
-        uint32_t d[1] = { g_next_serial++ };
-        ev(cb, 0 /*done*/, d, 1);
-        wl_delete_id(cb);
-    } else if (op == 1) {                /* get_registry(registry) */
-        if (n < 4) return;
-        uint32_t reg = r_u32(a);
-        obj_set(reg, O_REGISTRY);
-        for (uint32_t i = 0; i < NGLOBAL; i++)
-            ev_global(reg, G[i].name, G[i].iface, G[i].version);
-        dbg("[wl] registry sent\n");
+    uint32_t *dst = g_out.canvas;
+    if (!dst) return;
+
+    paint_background(dst);
+    for (uint32_t i = 0; i < g_zcount; i++) {
+        const wlc_window_t *w = &g_windows[g_zorder[i]];
+        if (w->used && w->mapped) paint_window(dst, w);
     }
+    if (!g_out.hosted) paint_cursor(dst);
 }
 
-static void req_registry(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
+static void output_flush(void)
 {
-    (void)id;
-    if (op != 0 || n < 12) return;      /* bind(name, iface, version, new_id) */
-    uint32_t name = r_u32(a);
-    uint32_t ilen = r_u32(a + 4);
-    uint32_t ipad = (ilen + 3) & ~3u;
-    if (8 + ipad + 8 > n) return;
-    const char *iface = (const char *)(a + 8);
-    uint32_t newid = r_u32(a + 8 + ipad + 4);
-
-    if (!strcmp(iface, "wl_compositor"))            obj_set(newid, O_COMPOSITOR);
-    else if (!strcmp(iface, "wl_shm"))             { obj_set(newid, O_SHM); send_shm_formats(newid); }
-    else if (!strcmp(iface, "wl_subcompositor"))    obj_set(newid, O_SUBCOMPOSITOR);
-    else if (!strcmp(iface, "xdg_wm_base"))         obj_set(newid, O_XDG_WM_BASE);
-    else if (!strcmp(iface, "wl_seat"))            { obj_set(newid, O_SEAT);
-        uint32_t c[1] = { 0 }; ev(newid, 0 /*capabilities*/, c, 1);
-        const char *nm = "seat0"; uint32_t l = 6, p = 8; uint8_t *m = g_tx;
-        uint32_t sz = 8 + 4 + p; w_u32(m, newid); w_u32(m + 4, (sz << 16) | 1 /*name*/);
-        w_u32(m + 8, l); memset(m + 12, 0, p); memcpy(m + 12, nm, 5);
-        if (g_client >= 0) u_send(g_client, m, sz); }
-    else if (!strcmp(iface, "wl_output"))          { obj_set(newid, O_OUTPUT); send_output_info(newid); }
-    else if (!strcmp(iface, "wl_data_device_manager")) obj_set(newid, O_DDM);
-    else { dbg("[wl] bind unknown iface\n"); obj_set(newid, O_NONE); }
-    (void)name;
-}
-
-static void req_compositor(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    (void)id;
-    if (n < 4) return;
-    uint32_t nid = r_u32(a);
-    if (op == 0)      obj_set(nid, O_SURFACE);      /* create_surface */
-    else if (op == 1) obj_set(nid, O_REGION);       /* create_region  */
-}
-
-static void req_shm(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    (void)id;
-    if (op != 0 || n < 8) return;                   /* create_pool(id, fd, size) */
-    uint32_t nid = r_u32(a);
-    uint32_t size = r_u32(a + 4);
-    int32_t fd = -1;
-    if (g_rx_fd_tail != g_rx_fd_head) {
-        fd = g_rx_fds[g_rx_fd_tail];
-        g_rx_fd_tail = (g_rx_fd_tail + 1) % 16;
+    if (g_out.hosted) {
+        window_damage(g_out.win, 0u, 0u, g_out.w, g_out.h);
+        window_end_transaction(g_out.win);
+        return;
     }
-    obj_set(nid, O_SHM_POOL);
-    obj_t *o = obj(nid);
-    if (fd < 0) { dbg("[wl] create_pool without fd!\n"); return; }
-    int32_t h = os_memfd_shm_handle(fd);
-    if (h < 0) { dbg("[wl] create_pool: fd is not shm-backed\n"); return; }
-    uint8_t *base = (uint8_t *)os_shared_memory_map(h);
-    if (!base) { dbg("[wl] create_pool: shm map failed\n"); return; }
-    o->pool_base = base;
-    o->pool_size = size;
-    o->pool_handle = h;
-    dbg("[wl] pool mapped\n");
-}
 
-static void req_shm_pool(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    if (op == 0) {                                  /* create_buffer */
-        if (n < 24) return;
-        uint32_t nid = r_u32(a);
-        obj_set(nid, O_BUFFER);
-        obj_t *b = obj(nid);
-        b->b_pool   = id;
-        b->b_off    = r_u32(a + 4);
-        b->b_w      = r_u32(a + 8);
-        b->b_h      = r_u32(a + 12);
-        b->b_stride = r_u32(a + 16);
-        b->b_fmt    = r_u32(a + 20);
-    }
-    /* destroy / resize: ignored (fixed pool for MVP) */
-}
-
-static void req_surface(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    obj_t *s = obj(id);
-    if (!s) return;
-    switch (op) {
-    case 1: /* attach(buffer, x, y) */
-        if (n >= 4) s->s_pending_buf = r_u32(a);
-        break;
-    case 3: /* frame(callback) */
-        if (n >= 4) { uint32_t cb = r_u32(a); obj_set(cb, O_CALLBACK); s->s_frame_cb = cb; }
-        break;
-    case 6: /* commit */
-        if (s->s_pending_buf) {
-            s->s_current_buf = s->s_pending_buf;
-            s->s_pending_buf = 0;
-            present_buffer(s->s_current_buf);
-
-            ev(s->s_current_buf, 0 /*wl_buffer.release*/, NULL, 0);
+    if (g_out.fb) {
+        uint32_t stride = g_out.fb_stride < g_out.w ? g_out.w : g_out.fb_stride;
+        for (uint32_t y = 0; y < g_out.h; y++) {
+            memcpy(&g_out.fb[(size_t)y * stride],
+                   &g_out.canvas[(size_t)y * g_out.w],
+                   (size_t)g_out.w * sizeof(uint32_t));
         }
-        if (s->s_frame_cb) {
-            uint32_t d[1] = { g_next_serial++ };
-            ev(s->s_frame_cb, 0 /*done*/, d, 1);
-            wl_delete_id(s->s_frame_cb);
-            s->s_frame_cb = 0;
-        }
-        break;
-    default: break; /* damage/opaque/input/scale/transform/offset: ignored */
-    }
-}
-
-static void req_xdg_wm_base(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    (void)id;
-    if (op == 1) {                                  /* create_positioner */
-        if (n >= 4) obj_set(r_u32(a), O_POSITIONER);
-    } else if (op == 2) {                           /* get_xdg_surface(id, surface) */
-        if (n < 8) return;
-        uint32_t nid = r_u32(a), surf = r_u32(a + 4);
-        obj_set(nid, O_XDG_SURFACE);
-        obj_t *xs = obj(nid);
-        xs->x_surface = surf;
-        obj_t *s = obj(surf);
-        if (s) s->s_xdg = nid;
-    }
-    /* pong / destroy: ignored */
-}
-
-static void req_xdg_surface(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    obj_t *xs = obj(id);
-    if (!xs) return;
-    if (op == 1) {                                  /* get_toplevel(id) */
-        if (n < 4) return;
-        uint32_t nid = r_u32(a);
-        obj_set(nid, O_XDG_TOPLEVEL);
-        xs->x_toplevel = nid;
-        /* Initial configure: let the client choose its size (0,0), then ack. */
-        uint32_t tc[3] = { 0, 0, 0 };               /* width,height,states(array len 0) */
-        /* xdg_toplevel.configure has an array arg; send it with len 0. */
-        uint8_t *m = g_tx; uint32_t sz = 8 + 4 + 4 + 4;
-        w_u32(m, nid); w_u32(m + 4, (sz << 16) | 0 /*configure*/);
-        w_u32(m + 8, tc[0]); w_u32(m + 12, tc[1]); w_u32(m + 16, 0 /*array len*/);
-        if (g_client >= 0) u_send(g_client, m, sz);
-        xs->x_serial = g_next_serial++;
-        uint32_t sc[1] = { xs->x_serial };
-        ev(id, 0 /*xdg_surface.configure*/, sc, 1);
-        dbg("[wl] xdg toplevel configured\n");
-    } else if (op == 4) {                           /* ack_configure(serial) */
-        /* fine */
-    }
-}
-
-static void req_seat(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    (void)id;
-    if (n < 4) return;
-    uint32_t nid = r_u32(a);
-    if (op == 0)      obj_set(nid, O_POINTER);
-    else if (op == 1) obj_set(nid, O_KEYBOARD);
-    else if (op == 2) obj_set(nid, O_NONE);         /* touch */
-}
-
-static void req_subcompositor(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    (void)id;
-    if (op == 1 && n >= 4) obj_set(r_u32(a), O_SUBSURFACE);  /* get_subsurface */
-}
-
-static void req_ddm(uint32_t id, uint16_t op, const uint8_t *a, uint32_t n)
-{
-    (void)id;
-    if (n < 4) return;
-    uint32_t nid = r_u32(a);
-    if (op == 0)      obj_set(nid, O_DATA_SOURCE);
-    else if (op == 1) obj_set(nid, O_DATA_DEVICE);
-}
-
-static void dispatch(uint32_t id, uint16_t op, const uint8_t *args, uint32_t alen)
-{
-    if (id == 1) { req_display(id, op, args, alen); return; }
-    obj_t *o = obj(id);
-    if (!o) { dbg("[wl] msg to unknown id\n"); return; }
-    switch (o->type) {
-    case O_REGISTRY:      req_registry(id, op, args, alen); break;
-    case O_COMPOSITOR:    req_compositor(id, op, args, alen); break;
-    case O_SHM:           req_shm(id, op, args, alen); break;
-    case O_SHM_POOL:      req_shm_pool(id, op, args, alen); break;
-    case O_SURFACE:       req_surface(id, op, args, alen); break;
-    case O_XDG_WM_BASE:   req_xdg_wm_base(id, op, args, alen); break;
-    case O_XDG_SURFACE:   req_xdg_surface(id, op, args, alen); break;
-    case O_XDG_TOPLEVEL:  /* set_title/app_id/etc: ignored */ break;
-    case O_SEAT:          req_seat(id, op, args, alen); break;
-    case O_SUBCOMPOSITOR: req_subcompositor(id, op, args, alen); break;
-    case O_DDM:           req_ddm(id, op, args, alen); break;
-    default: break;
-    }
-}
-
-/* ---- socket read: one recvmsg, append bytes to g_rx, queue any fds ---- */
-static int pump_read(void)
-{
-    if (g_rxlen >= RX_CAP) return 0;
-    struct iovec_k iov = { (uint64_t)(uintptr_t)(g_rx + g_rxlen), RX_CAP - g_rxlen };
-    uint8_t cbuf[64];
-    struct msghdr_k msg;
-    memset(&msg, 0, sizeof(msg));
-    msg.iov = (uint64_t)(uintptr_t)&iov;
-    msg.iovlen = 1;
-    msg.control = (uint64_t)(uintptr_t)cbuf;
-    msg.controllen = sizeof(cbuf);
-    int64_t r = (int64_t)syscall2(SYS_UNIX_RECVMSG, (uint64_t)g_client, (uint64_t)(uintptr_t)&msg);
-    if (r <= 0) return (int)r;
-    g_rxlen += (uint32_t)r;
-    if (msg.controllen >= sizeof(struct cmsghdr_k)) {
-        struct cmsghdr_k *c = (struct cmsghdr_k *)cbuf;
-        if (c->level == 1 && c->type == 1) {
-            uint32_t nf = (c->len - (uint32_t)sizeof(*c)) / 4;
-            int32_t *fds = (int32_t *)(cbuf + sizeof(*c));
-            for (uint32_t i = 0; i < nf; i++) {
-                uint32_t next = (g_rx_fd_head + 1) % 16;
-                if (next != g_rx_fd_tail) { g_rx_fds[g_rx_fd_head] = fds[i]; g_rx_fd_head = next; }
+    } else {
+        /* No mapped scanout: fall back to the driver's own fill, coalescing
+         * runs of one colour. Slow, but it is the difference between a
+         * visible session and a black screen (the window manager keeps the
+         * same fallback). */
+        for (uint32_t y = 0; y < g_out.h; y++) {
+            const uint32_t *row = &g_out.canvas[(size_t)y * g_out.w];
+            uint32_t x = 0u;
+            while (x < g_out.w) {
+                uint32_t run = 1u;
+                while (x + run < g_out.w && row[x + run] == row[x]) run++;
+                draw_fill_rect(x, y, run, 1u, row[x]);
+                x += run;
             }
         }
     }
-    return (int)r;
+    display_rect_t r = { 0, 0, g_out.w, g_out.h };
+    draw_present_rects(&r, 1u);
 }
 
-static void process_rx(void)
+/* ------------------------------------------------------------------ */
+/* output setup                                                         */
+/* ------------------------------------------------------------------ */
+
+static uint32_t panel_stride(uint32_t width)
 {
-    uint32_t off = 0;
-    while (g_rxlen - off >= 8) {
-        const uint8_t *m = g_rx + off;
-        uint32_t id = r_u32(m);
-        uint32_t w1 = r_u32(m + 4);
-        uint16_t op = (uint16_t)(w1 & 0xffff);
-        uint32_t size = w1 >> 16;
-        if (size < 8 || size > RX_CAP) { dbg("[wl] bad msg size\n"); off = g_rxlen; break; }
-        if (g_rxlen - off < size) break;                 /* partial */
-        dispatch(id, op, m + 8, size - 8);
-        off += (size + 3) & ~3u;                          /* messages are 4-aligned */
+    display_mode_info_t mode;
+    memset(&mode, 0, sizeof(mode));
+    if (display_get_monitor_mode_info(0u, 0u, &mode) >= 0 && mode.stride >= width) {
+        return mode.stride;
     }
-    if (off > 0) {
-        memmove(g_rx, g_rx + off, g_rxlen - off);
-        g_rxlen -= off;
+    return width;
+}
+
+static bool output_open_panel(void)
+{
+    uint32_t w = get_display_width();
+    uint32_t h = get_display_height();
+    if (w == 0u || h == 0u) { w = 1024u; h = 768u; }
+
+    /* Claiming the raw HID stream is also what registers this process as
+     * the kernel's input owner, so nothing else can take input away
+     * mid-session. Without it input_read_* is denied. */
+    if (window_register_service() != 0) {
+        wlc_log("[wl] could not claim input ownership\n");
+        return false;
     }
+
+    g_out.canvas = (uint32_t *)malloc((size_t)w * h * sizeof(uint32_t));
+    if (!g_out.canvas) { wlc_log("[wl] out of memory for the output\n"); return false; }
+    g_out.w = w;
+    g_out.h = h;
+    g_out.hosted = false;
+    g_out.win = 0u;
+    g_out.fb = (uint32_t *)sys_get_display_framebuffer();
+    g_out.fb_stride = panel_stride(w);
+    g_ptr_x = (int32_t)(w / 2u);
+    g_ptr_y = (int32_t)(h / 2u);
+    wlc_logf_u32("[wl] panel output, width=", w);
+    return true;
+}
+
+/* Leave room for the WM's decorations and taskbar so the whole Wayland
+ * output stays reachable. */
+#define HOSTED_MARGIN_W 120u
+#define HOSTED_MARGIN_H 160u
+
+static bool output_open_hosted(void)
+{
+    uint32_t sw = get_display_width();
+    uint32_t sh = get_display_height();
+    if (sw == 0u || sh == 0u) { sw = 1024u; sh = 768u; }
+
+    uint32_t w = sw > HOSTED_MARGIN_W ? sw - HOSTED_MARGIN_W : sw;
+    uint32_t h = sh > HOSTED_MARGIN_H ? sh - HOSTED_MARGIN_H : sh;
+
+    window_id_t win = window_create(w, h, "Wayland");
+    if (win == 0u) { wlc_log("[wl] window_create failed\n"); return false; }
+
+    uint32_t bw = 0, bh = 0;
+    uint32_t *pixels = window_get_backing_store(win, &bw, &bh);
+    if (!pixels || bw == 0u || bh == 0u) {
+        wlc_log("[wl] no backing store for the Wayland window\n");
+        window_destroy(win);
+        return false;
+    }
+
+    g_out.canvas = pixels;
+    g_out.w = bw;
+    g_out.h = bh;
+    g_out.hosted = true;
+    g_out.win = win;
+    g_out.fb = NULL;
+    g_out.fb_stride = 0u;
+
+    (void)window_set_surface_opaque(win, true);
+    (void)window_subscribe_keyboard(win);
+    (void)window_subscribe_mouse(win);
+    window_show(win);
+    window_raise(win);
+    wlc_logf_u32("[wl] hosted in a WM window, width=", bw);
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* input                                                                */
+/* ------------------------------------------------------------------ */
+
+/* Set-1 scancodes and evdev keycodes agree over 0x01..0x58, which covers
+ * everything but the 0xE0-prefixed keys. */
+static uint16_t evdev_from_scancode(uint16_t sc)
+{
+    switch (sc) {
+    case 0xE01Cu: return 96;   /* KP_ENTER   */
+    case 0xE01Du: return 97;   /* RIGHTCTRL  */
+    case 0xE035u: return 98;   /* KP_SLASH   */
+    case 0xE037u: return 99;   /* SYSRQ      */
+    case 0xE038u: return 100;  /* RIGHTALT   */
+    case 0xE047u: return 102;  /* HOME       */
+    case 0xE048u: return 103;  /* UP         */
+    case 0xE049u: return 104;  /* PAGEUP     */
+    case 0xE04Bu: return 105;  /* LEFT       */
+    case 0xE04Du: return 106;  /* RIGHT      */
+    case 0xE04Fu: return 107;  /* END        */
+    case 0xE050u: return 108;  /* DOWN       */
+    case 0xE051u: return 109;  /* PAGEDOWN   */
+    case 0xE052u: return 110;  /* INSERT     */
+    case 0xE053u: return 111;  /* DELETE     */
+    case 0xE05Bu: return 125;  /* LEFTMETA   */
+    case 0xE05Cu: return 126;  /* RIGHTMETA  */
+    case 0xE05Du: return 127;  /* COMPOSE    */
+    default: break;
+    }
+    if (sc >= 0x01u && sc <= 0x58u) return sc;
+    return 0u;
+}
+
+/* Linux button codes, which is what wl_pointer.button carries. */
+#define BTN_LEFT   0x110u
+#define BTN_RIGHT  0x111u
+#define BTN_MIDDLE 0x112u
+
+static uint8_t g_buttons;          /* last delivered button state */
+
+static void deliver_buttons(uint8_t buttons)
+{
+    static const struct { uint8_t bit; uint32_t code; } map[] = {
+        { INPUT_MOUSE_BTN_LEFT,   BTN_LEFT   },
+        { INPUT_MOUSE_BTN_RIGHT,  BTN_RIGHT  },
+        { INPUT_MOUSE_BTN_MIDDLE, BTN_MIDDLE },
+    };
+    for (uint32_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        bool was = (g_buttons & map[i].bit) != 0u;
+        bool now = (buttons & map[i].bit) != 0u;
+        if (was != now) wlc_seat_pointer_button(map[i].code, now);
+    }
+    /* Bits 3 and 4 are the wheel on the USB HID path, reported as buttons
+     * that pulse rather than as a wheel delta (see the window manager's
+     * WM_Input.c, which reads them the same way). */
+    if ((buttons & 0x08u) && !(g_buttons & 0x08u)) wlc_seat_pointer_axis(-1);
+    if ((buttons & 0x10u) && !(g_buttons & 0x10u)) wlc_seat_pointer_axis(1);
+    g_buttons = buttons;
+}
+
+static bool input_poll_panel(void)
+{
+    bool any = false;
+
+    input_mouse_event_t raw;
+    int32_t dx = 0, dy = 0, wheel = 0;
+    uint8_t buttons = g_buttons;
+    uint32_t moves = 0;
+    while (input_read_mouse(&raw) > 0) {
+        dx += (int16_t)raw.x;
+        dy += (int16_t)raw.y;
+        wheel += raw.wheel;
+        buttons = raw.buttons;
+        ++moves;
+    }
+    if (moves > 0u) {
+        any = true;
+        int32_t nx = g_ptr_x + dx;
+        int32_t ny = g_ptr_y + dy;
+        if (nx < 0) nx = 0;
+        if (ny < 0) ny = 0;
+        if (nx >= (int32_t)g_out.w) nx = (int32_t)g_out.w - 1;
+        if (ny >= (int32_t)g_out.h) ny = (int32_t)g_out.h - 1;
+        if (nx != g_ptr_x || ny != g_ptr_y) {
+            g_ptr_x = nx;
+            g_ptr_y = ny;
+            g_dirty = true;          /* the pointer sprite moved */
+        }
+        wlc_seat_pointer_motion(g_ptr_x, g_ptr_y);
+        deliver_buttons(buttons);
+        if (wheel != 0) wlc_seat_pointer_axis(wheel > 0 ? -1 : 1);
+    }
+
+    input_keyboard_event_t key;
+    while (input_read_keyboard(&key) > 0) {
+        any = true;
+        uint16_t code = evdev_from_scancode(key.keycode);
+        if (code != 0u) wlc_seat_key(code, key.pressed != 0u, key.modifiers);
+    }
+    return any;
+}
+
+static bool input_poll_hosted(void)
+{
+    bool any = false;
+
+    /* The WM already tracks the pointer and hands over window-local
+     * coordinates, which are output coordinates here. */
+    input_mouse_event_t m;
+    while (window_input_mouse_poll(&m) > 0) {
+        any = true;
+        g_ptr_x = (int32_t)m.x;
+        g_ptr_y = (int32_t)m.y;
+        wlc_seat_pointer_motion(g_ptr_x, g_ptr_y);
+        deliver_buttons(m.buttons);
+        if (m.wheel != 0) wlc_seat_pointer_axis(m.wheel > 0 ? -1 : 1);
+    }
+
+    input_keyboard_event_t key;
+    while (window_input_keyboard_poll(&key) > 0) {
+        any = true;
+        uint16_t code = evdev_from_scancode(key.keycode);
+        if (code != 0u) wlc_seat_key(code, key.pressed != 0u, key.modifiers);
+    }
+    return any;
+}
+
+static bool input_poll(void)
+{
+    return g_out.hosted ? input_poll_hosted() : input_poll_panel();
+}
+
+/* ------------------------------------------------------------------ */
+/* main                                                                 */
+/* ------------------------------------------------------------------ */
+
+static int32_t u_socket(void) { return (int32_t)syscall1(SYS_UNIX_SOCKET, 1u); }
+static int32_t u_bind(int32_t fd, const char *p)
+{
+    return (int32_t)syscall2(SYS_UNIX_BIND, (uint64_t)fd, (uint64_t)(uintptr_t)p);
+}
+static int32_t u_listen(int32_t fd)
+{
+    return (int32_t)syscall2(SYS_UNIX_LISTEN, (uint64_t)fd, 8u);
+}
+static int32_t u_accept(int32_t fd)
+{
+    return (int32_t)syscall1(SYS_UNIX_ACCEPT, (uint64_t)fd);
+}
+
+/* Move every mapped toplevel back inside the output, for when the output
+ * changes size under them (the WM disappearing, say). */
+static void reclamp_windows(void)
+{
+    for (uint32_t i = 0; i < WLC_MAX_WINDOWS; i++) {
+        wlc_window_t *w = &g_windows[i];
+        if (!w->used || !w->mapped) continue;
+        if (w->x + (int32_t)w->w > (int32_t)g_out.w)
+            w->x = (int32_t)g_out.w - (int32_t)w->w;
+        if (w->y + (int32_t)w->h > (int32_t)g_out.h)
+            w->y = (int32_t)g_out.h - (int32_t)w->h;
+        if (w->x < 0) w->x = 0;
+        if (w->y < 0) w->y = 0;
+    }
+}
+
+/* "panel" / "hosted" force a backend; anything else picks whichever fits
+ * what is running. */
+#define MODE_AUTO   0
+#define MODE_PANEL  1
+#define MODE_HOSTED 2
+
+static int read_mode(void)
+{
+    char arg[64];
+    memset(arg, 0, sizeof(arg));
+    if (process_get_launch_argument(arg, (uint32_t)sizeof(arg)) < 0) return MODE_AUTO;
+    if (strstr(arg, "panel"))  return MODE_PANEL;
+    if (strstr(arg, "hosted")) return MODE_HOSTED;
+    return MODE_AUTO;
 }
 
 void _start(void)
 {
-    dbg("[wl] compositor starting\n");
+    wlc_log("[wl] compositor starting\n");
 
-    /* our on-screen window (created before any client so it exists early) */
-    while (window_get_wm_pid() < 0) process_yield();
-    g_win = window_create(900, 700, "Wayland");
-    if (g_win) g_winpx = window_get_backing_store(g_win, &g_win_w, &g_win_h);
-    if (g_winpx) {
-        for (uint32_t i = 0; i < g_win_w * g_win_h; i++) g_winpx[i] = 0xff202428u;
-        window_damage(g_win, 0, 0, g_win_w, g_win_h);
-        window_end_transaction(g_win);
+    int mode = read_mode();
+    bool opened = false;
+
+    if (mode == MODE_HOSTED) {
+        /* Asked for the WM explicitly: give it a moment to come up. */
+        for (uint32_t waited = 0; waited < 5000u && window_get_wm_pid() < 0;
+             waited += 100u) {
+            sleep_ms(100);
+        }
     }
 
-    int ls = u_socket();
-    dbg(ls < 0 ? "[wl] u_socket FAILED\n" : "[wl] u_socket ok\n");
-    if (ls < 0) process_exit(1);
-    int br = u_bind(ls, WL_SOCK_PATH);
-    dbg(br < 0 ? "[wl] u_bind FAILED\n" : "[wl] u_bind ok\n");
-    if (br < 0) process_exit(1);
-    int lr = u_listen(ls);
-    dbg(lr < 0 ? "[wl] u_listen FAILED\n" : "[wl] u_listen ok\n");
-    if (lr < 0) process_exit(1);
-    dbg("[wl] listening on " WL_SOCK_PATH "\n");
+    bool wm_running = (mode != MODE_PANEL) && (window_get_wm_pid() >= 0);
+    if (wm_running) opened = output_open_hosted();
+    if (!opened && mode != MODE_HOSTED) opened = output_open_panel();
+    if (!opened) {
+        wlc_log("[wl] no usable output, giving up\n");
+        process_exit(1);
+    }
+
+    wlc_client_init_slots();
+    memset(g_windows, 0, sizeof(g_windows));
+    g_zcount = 0;
+
+    int32_t ls = u_socket();
+    if (ls < 0) { wlc_log("[wl] u_socket FAILED\n"); process_exit(1); }
+    if (u_bind(ls, WL_SOCK_PATH) < 0) { wlc_log("[wl] u_bind FAILED\n"); process_exit(1); }
+    if (u_listen(ls) < 0) { wlc_log("[wl] u_listen FAILED\n"); process_exit(1); }
+    wlc_log("[wl] listening on " WL_SOCK_PATH "\n");
+
+    /* Paint once up front so the session is visible before any client
+     * connects -- in panel mode this is the whole screen. */
+    g_dirty = true;
+    uint32_t last_frame = 0u;
 
     for (;;) {
-        if (g_client < 0) {
-            int c = u_accept(ls);
-            if (c >= 0) {
-                g_client = c;
-                memset(g_obj, 0, sizeof(g_obj));
-                g_obj[1].type = O_DISPLAY;
-                g_rxlen = 0; g_rx_fd_head = g_rx_fd_tail = 0;
-                dbg("[wl] client connected\n");
+        bool busy = false;
+
+        int32_t c = u_accept(ls);
+        while (c >= 0) {
+            if (wlc_client_accept(c)) busy = true;
+            c = u_accept(ls);
+        }
+
+        for (uint32_t i = 0; i < WLC_MAX_CLIENTS; i++) {
+            if (g_clients[i].fd < 0) continue;
+            if (wlc_client_pump(&g_clients[i])) busy = true;
+        }
+
+        if (input_poll()) busy = true;
+
+        /* Outlive the window manager. The scene is held in this process --
+         * every surface's pixels were copied out at commit -- so when the
+         * WM exits there is nothing to rebuild: take the panel and carry on
+         * with the same clients still connected. */
+        if (g_out.hosted && window_get_wm_pid() < 0) {
+            wlc_log("[wl] window manager gone, taking over the panel\n");
+            g_out.hosted = false;
+            if (output_open_panel()) {
+                reclamp_windows();
+                g_dirty = true;
+                busy = true;
             } else {
-                process_yield();
-                continue;
+                wlc_log("[wl] panel takeover failed, exiting\n");
+                process_exit(1);
             }
         }
-        int r = pump_read();
-        if (r > 0) {
-            process_rx();
-        } else {
-            /* nothing to read yet; yield + brief nap so we don't spin a core */
-            sleep_ms(4);
+
+        uint32_t now = wlc_now_ms();
+        if (now - last_frame >= FRAME_MS) {
+            if (g_dirty) {
+                compose();
+                output_flush();
+                g_dirty = false;
+                busy = true;
+            }
+            if (wlc_frames_done()) busy = true;
+            last_frame = now;
         }
+
+        if (!busy) sleep_ms(IDLE_NAP_MS);
     }
 }

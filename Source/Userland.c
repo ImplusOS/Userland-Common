@@ -82,6 +82,60 @@ static int32_t spawn_with_fallbacks(const char *const *paths, uint32_t path_coun
     return -1;
 }
 
+/*
+ * Bring-up / unattended autostart.
+ *
+ * /Userland/autostart.list holds one ELF path per line ('#' comments and blank
+ * lines ignored). Init spawns each after the session owner is up. It exists so
+ * a headless QEMU run can exercise a GUI-less program (the Chromium launcher,
+ * say) without anyone clicking the window manager's launcher, and so an image
+ * can be built that boots straight into one app.
+ *
+ * The file is absent from the default image, so this is a no-op unless an
+ * image was mastered with AUTOSTART= set (see the top-level Makefile).
+ */
+#define AUTOSTART_LIST_PATH "/Userland/autostart.list"
+
+static void run_autostart_list(void)
+{
+    file_stat_t st;
+    if (file_stat(AUTOSTART_LIST_PATH, &st) < 0 || !st.exists || st.is_dir ||
+        st.size == 0 || st.size >= 8192u) {
+        return;
+    }
+
+    int32_t fd = file_open(AUTOSTART_LIST_PATH, 0);
+    if (fd < 0) return;
+
+    char buf[8192];
+    int64_t n = file_read(fd, buf, (uint64_t)st.size);   /* < sizeof(buf) */
+    file_close(fd);
+    if (n <= 0) return;
+    buf[n] = '\0';
+
+    char *line = buf;
+    while (line && *line) {
+        char *nl = line;
+        while (*nl && *nl != '\n' && *nl != '\r') nl++;
+        char terminator = *nl;
+        *nl = '\0';
+
+        /* trim leading blanks */
+        while (*line == ' ' || *line == '\t') line++;
+        if (*line != '\0' && *line != '#') {
+            serial_write_string("[autostart] ");
+            serial_write_string(line);
+            int32_t pid = process_spawn(line);
+            serial_write_string(" -> ");
+            serial_write_i32(pid);
+            serial_write_string("\n");
+        }
+
+        if (terminator == '\0') break;
+        line = nl + 1;
+    }
+}
+
 static uint8_t *g_font_buffer = NULL;
 static stbtt_fontinfo g_font;
 static int g_font_loaded = 0;
@@ -1013,31 +1067,6 @@ static void serial_write_dec(uint32_t value)
     serial_write_string(&buf[i]);
 }
 
-static void measure_and_print_cpu_usage(void) {
-    system_cpu_usage_t snap1, snap2;
-    if (os_get_cpu_usage(&snap1) < 0) return;
-    sleep_ms(1000);
-    if (os_get_cpu_usage(&snap2) < 0) return;
-
-    uint64_t wall_delta = snap2.wall_ns - snap1.wall_ns;
-    if (wall_delta == 0) return;
-
-    serial_write_string("[CPU] per-core usage over 1s:\n");
-    uint32_t count = snap2.cpu_count;
-    if (count == 0) count = 1;
-    for (uint32_t i = 0; i < count && i < OS_CPU_USAGE_MAX_CORES; ++i) {
-        uint64_t idle_delta = snap2.idle_ns[i] - snap1.idle_ns[i];
-        uint32_t busy_pct = (uint32_t)((idle_delta * 100ULL) / wall_delta);
-        uint32_t used_pct = (busy_pct <= 100u) ? (100u - busy_pct) : 0u;
-
-        serial_write_string("  CPU");
-        serial_write_dec(i);
-        serial_write_string(": ");
-        serial_write_dec(used_pct);
-        serial_write_string("%\n");
-    }
-}
-
 int Enable_Login = false;
 
 void _start(void) {
@@ -1098,11 +1127,6 @@ void _start(void) {
      * be dropped again at runtime via service_unload(). */
     service_load_all();
 
-    /* Hand off to the graphical login screen. It owns the rest of the
-     * session: it authenticates the user (userland credential store at
-     * /var/System/users.db, hashed with Library/Crypto), records the
-     * session under /run/, then starts the window-manager session and
-     * stays resident as the session leader. */
     static const char *const login_paths[] = {
         "/Userland/com.ImplusOS.loginui/com.ImplusOS.loginui.ELF",
     };
@@ -1111,8 +1135,6 @@ void _start(void) {
     process_yield();
 
     if (login_pid < 0) {
-        /* No login screen on the image -- fall back to launching the
-         * window manager directly so the system is still usable. */
         static const char *const wm_paths[] = {
             "/Userland/com.ImplusOS.windowmanager/com.ImplusOS.windowmanager.ELF",
         };
@@ -1133,7 +1155,9 @@ void _start(void) {
             spawn_with_fallbacks(sysnotif_paths, 1);
         }
     }
-    
+
+    run_autostart_list();
+
     if (g_bg_cache) {
         free(g_bg_cache);
         g_bg_cache = NULL;

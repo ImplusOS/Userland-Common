@@ -336,6 +336,18 @@ int32_t os_memfd_shm_handle(int32_t fd)
                              (uint64_t)(int64_t)fd);
 }
 
+int32_t os_memfd_from_shm(int32_t handle)
+{
+    return (int32_t)syscall1(SYSCALL_MEMFD_FROM_SHM,
+                             (uint64_t)(int64_t)handle);
+}
+
+uint32_t os_shared_memory_size(int32_t handle)
+{
+    return (uint32_t)syscall1(SYSCALL_SHARED_MEMORY_SIZE,
+                              (uint64_t)(int64_t)handle);
+}
+
 /* ---- Foreign-server bring-up helpers ------------------------------------ */
 
 int32_t unix_socket_is_listening(const char *path)

@@ -2,6 +2,10 @@
 Files|/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF|FM
 Editor|/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF|ED
 BusyBox|/Userland/BusyBox/BusyBox.ELF|BB
+Terminal|/Userland/Terminal/Terminal.ELF|TE
 Doom|/Userland/Doom/Doom.ELF|DM
+Chromium|/Userland/Chromium/Chromium.ELF|CR
 GTK3 Demo|/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF|GK
 Wayland Compositor|/Userland/com.ImplusOS.waylandcompositor/com.ImplusOS.waylandcompositor.ELF|WL
+FastFetch|/Userland/FastFetch/FastFetch.ELF|FF
+Serial Monitor|/Userland/com.ImplusOS.serialmonitor/com.ImplusOS.serialmonitor.ELF|SM
