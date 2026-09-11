@@ -107,6 +107,16 @@ static void run_autostart_list(void)
     int32_t fd = file_open(AUTOSTART_LIST_PATH, 0);
     if (fd < 0) return;
 
+    /* Wait for the window manager before spawning anything. An autostarted app
+     * that wants a window has to find one -- the X11 launchers in particular
+     * fall back to letting Xorg scan out to the panel directly when there is
+     * no compositor to host them, and then the two draw over each other. The
+     * bound is a timeout, not a delay: it ends as soon as the WM registers. */
+    for (int i = 0; i < 500; ++i) {
+        if (window_get_wm_pid() >= 0) break;
+        sleep_ms(20);
+    }
+
     char buf[8192];
     int64_t n = file_read(fd, buf, (uint64_t)st.size);   /* < sizeof(buf) */
     file_close(fd);
@@ -1003,33 +1013,196 @@ static bool run_user_login_flow(char *current_username, size_t current_username_
     return user_login_authenticate(current_username, current_username_size);
 }
 
-static void fade_in(uint32_t duration_ms, uint32_t steps) {
-    uint32_t width  = get_display_width(), height = get_display_height();
-    uint32_t *fb = (uint32_t *)sys_get_display_framebuffer();
-    if (!fb) return;
+/* ---- first-screen intro transition ---------------------------------------
+ *
+ * The other half of the kernel's hand-off animation (Kernel/Source/Boot/
+ * BootAnim.c): the kernel leaves the panel black after pushing its own boot
+ * screen out to 150%, and this picks the motion up where that left off. The
+ * composed first screen is copied, then two animations play together on one
+ * ease-in-out curve:
+ *
+ *   1. scale   50% -> 100%  (about the screen centre)
+ *   2. opacity  0% -> 100%
+ *
+ * so the screen appears to come towards the viewer as it resolves out of the
+ * black the kernel handed over.
+ *
+ * This replaces the old fade_in(): that one stepped a fixed number of frames
+ * on a linear ramp, multiplied every channel by a float per pixel, and -- the
+ * visible part -- was called after the finished screen had already been
+ * presented, so the fade started with a full-brightness flash. The opacity is
+ * now a 256-entry table rebuilt once per frame (three lookups per pixel, no
+ * float, consistent rounding across the whole frame), the curve is the same
+ * ease-in-out the kernel half uses, and the first thing presented is the
+ * fully transparent frame.
+ */
+
+#define INTRO_DURATION_MS       420u
+#define INTRO_FRAME_MS          16u
+#define INTRO_SCALE_START_Q16   32768u  /* 0.5 in Q16 */
+#define INTRO_Q16_ONE           65536u
+
+/* Cubic ease-in-out, Q16 in / Q16 out: 4t^3 below the midpoint, 1-4(1-t)^3
+ * above it. 64-bit intermediates so the cubing cannot overflow. */
+static uint32_t intro_ease_in_out(uint32_t t_q16) {
+    if (t_q16 >= INTRO_Q16_ONE) return INTRO_Q16_ONE;
+
+    uint64_t v = (t_q16 < (INTRO_Q16_ONE / 2u)) ? (uint64_t)t_q16
+                                                : (uint64_t)(INTRO_Q16_ONE - t_q16);
+    uint64_t cube = (v * v) >> 16;
+    cube = (cube * v) >> 16;
+    cube *= 4u;
+
+    if (t_q16 < (INTRO_Q16_ONE / 2u)) return (uint32_t)cube;
+    return (uint32_t)(INTRO_Q16_ONE - cube);
+}
+
+static void intro_build_alpha_lut(uint8_t lut[256], uint32_t alpha) {
+    for (uint32_t v = 0; v < 256u; ++v) {
+        lut[v] = (uint8_t)((v * alpha + 127u) / 255u);
+    }
+}
+
+/* Draw the captured screen scaled about the centre and dimmed to alpha/255.
+ *
+ * Nearest-neighbour: the source is only ever minified here, and the frames
+ * where that drops pixels are the early ones, which are also the dim ones --
+ * by the time the opacity is up the scale is back at 1:1 and the sampling is
+ * exact. Anything filtered costs several texel fetches per pixel, which at
+ * panel resolution would cost frames rather than quality.
+ *
+ * Whatever falls outside the source is left black rather than clamped to the
+ * edge pixel, so the shrunken screen sits on the kernel's black panel instead
+ * of smearing its border across it. */
+static void intro_draw_frame(uint32_t *fb,
+                             const uint32_t *snapshot,
+                             int32_t *x_map,
+                             uint32_t width,
+                             uint32_t height,
+                             uint32_t scale_q16,
+                             uint32_t alpha) {
     uint32_t pixels = width * height;
 
+    if (alpha == 0u || scale_q16 == 0u) {
+        memset(fb, 0, (size_t)pixels * sizeof(uint32_t));
+        return;
+    }
+
+    uint32_t inv_q16 = (uint32_t)(((uint64_t)INTRO_Q16_ONE << 16) / scale_q16);
+    int32_t center_x = (int32_t)(width / 2u);
+    int32_t center_y = (int32_t)(height / 2u);
+
+    for (int32_t x = 0; x < (int32_t)width; ++x) {
+        int64_t src = (int64_t)center_x +
+                      (((int64_t)(x - center_x) * (int64_t)inv_q16) >> 16);
+        x_map[x] = (src < 0 || src >= (int64_t)width) ? -1 : (int32_t)src;
+    }
+
+    uint8_t lut[256];
+    intro_build_alpha_lut(lut, alpha);
+
+    for (int32_t y = 0; y < (int32_t)height; ++y) {
+        int64_t src_y = (int64_t)center_y +
+                        (((int64_t)(y - center_y) * (int64_t)inv_q16) >> 16);
+        uint32_t *dst_row = fb + (size_t)y * width;
+
+        if (src_y < 0 || src_y >= (int64_t)height) {
+            memset(dst_row, 0, (size_t)width * sizeof(uint32_t));
+            continue;
+        }
+
+        const uint32_t *src_row = snapshot + (size_t)src_y * width;
+
+        if (alpha == 255u) {
+            for (uint32_t x = 0; x < width; ++x) {
+                int32_t sx = x_map[x];
+                dst_row[x] = (sx < 0) ? 0u : src_row[sx];
+            }
+            continue;
+        }
+
+        for (uint32_t x = 0; x < width; ++x) {
+            int32_t sx = x_map[x];
+            if (sx < 0) {
+                dst_row[x] = 0u;
+                continue;
+            }
+            uint32_t p = src_row[sx];
+            dst_row[x] = ((uint32_t)lut[(p >> 16) & 0xFFu] << 16) |
+                         ((uint32_t)lut[(p >> 8) & 0xFFu] << 8) |
+                         ((uint32_t)lut[p & 0xFFu]);
+        }
+    }
+}
+
+/* Copy the screen as composed, then play it back in from 50% / fully
+ * transparent. Driven by the clock, not by a frame counter, so a panel too
+ * large to redraw at 60 Hz loses frames instead of stretching the boot. */
+static void intro_transition(uint32_t duration_ms) {
+    uint32_t width  = get_display_width();
+    uint32_t height = get_display_height();
+    uint32_t *fb = (uint32_t *)sys_get_display_framebuffer();
+    if (!fb || width == 0u || height == 0u || duration_ms == 0u) {
+        if (fb) draw_present();
+        return;
+    }
+
+    uint32_t pixels = width * height;
     if (!g_fb_snapshot || g_fb_snapshot_pixels != pixels) {
         free(g_fb_snapshot);
-        g_fb_snapshot = (uint32_t *)malloc(pixels * sizeof(uint32_t));
-        if (!g_fb_snapshot) return;
+        g_fb_snapshot = (uint32_t *)malloc((size_t)pixels * sizeof(uint32_t));
+        if (!g_fb_snapshot) {
+            g_fb_snapshot_pixels = 0;
+            draw_present();
+            return;
+        }
         g_fb_snapshot_pixels = pixels;
     }
-    memcpy(g_fb_snapshot, fb, pixels * sizeof(uint32_t));
-    uint32_t delay = duration_ms / steps;
+    memcpy(g_fb_snapshot, fb, (size_t)pixels * sizeof(uint32_t));
 
-    for (uint32_t step = 0; step <= steps; ++step) {
-        float t = (float)step / (float)steps;
-        for (uint32_t i = 0; i < pixels; ++i) {
-            uint32_t src = g_fb_snapshot[i];
-            uint8_t r = (uint8_t)(((src >> 16) & 0xFF) * t);
-            uint8_t g = (uint8_t)(((src >> 8) & 0xFF) * t);
-            uint8_t b = (uint8_t)((src & 0xFF) * t);
-            fb[i] = (r << 16) | (g << 8) | b;
-        }
+    int32_t *x_map = (int32_t *)malloc((size_t)width * sizeof(int32_t));
+    if (!x_map) {
         draw_present();
-        sleep_ms(delay);
+        return;
     }
+
+    uint64_t start_ms = get_uptime_ms();
+
+    for (;;) {
+        uint64_t frame_start_ms = get_uptime_ms();
+        uint64_t elapsed_ms = (frame_start_ms > start_ms)
+                                  ? (frame_start_ms - start_ms) : 0ull;
+
+        uint32_t t_q16 = (elapsed_ms >= duration_ms)
+                             ? INTRO_Q16_ONE
+                             : (uint32_t)((elapsed_ms << 16) / duration_ms);
+        uint32_t eased = intro_ease_in_out(t_q16);
+
+        uint32_t scale_q16 =
+            INTRO_SCALE_START_Q16 +
+            (uint32_t)(((uint64_t)(INTRO_Q16_ONE - INTRO_SCALE_START_Q16) *
+                        eased) >> 16);
+        uint32_t alpha = (uint32_t)(((uint64_t)eased * 255u) >> 16);
+
+        intro_draw_frame(fb, g_fb_snapshot, x_map,
+                         width, height, scale_q16, alpha);
+        draw_present();
+
+        if (t_q16 >= INTRO_Q16_ONE) break;
+
+        uint64_t spent_ms = get_uptime_ms() - frame_start_ms;
+        if (spent_ms < INTRO_FRAME_MS) {
+            sleep_ms(INTRO_FRAME_MS - spent_ms);
+        }
+    }
+
+    /* Land on the untouched copy: the last eased step is 1.0, but round-trip
+     * through the scaler is not bit-exact, and this is the image every app
+     * spawned next draws on top of. */
+    memcpy(fb, g_fb_snapshot, (size_t)pixels * sizeof(uint32_t));
+    draw_present();
+
+    free(x_map);
 }
 
 #define BOOT_COUNT_FILE "/Userland/boot_count.txt"
@@ -1119,8 +1292,11 @@ void _start(void) {
     snprintf(boot_msg, sizeof(boot_msg), "今回は、%d回目の起動です。", boot_count);
     draw_text_centered(boot_msg, 100, 25.0f, 0xFFFFFF);
 
-    draw_present();
-    fade_in(240, 12);
+    /* The first screen is composed but deliberately not presented yet: the
+     * transition copies it and presents the 50% / fully transparent frame
+     * first, so it grows out of the black panel the kernel handed over
+     * instead of flashing at full size and then fading up. */
+    intro_transition(INTRO_DURATION_MS);
 
     /* Pull in the Userland services (POSIX, network stack, ...) listed in
      * /Userland/Service/services.list. Each is a hot-loadable .so and can
