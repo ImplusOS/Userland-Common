@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <sys/syscalls.h>
+#include <sys/hal_syscall.h>
 #include "Syscalls.h"
 #include "../API/Source/File.h"
 #include "../API/Source/WM_Protocol.h"
@@ -362,6 +363,14 @@ int32_t display_kms_set_mirror(void *pixels, uint32_t width, uint32_t height)
     return (int32_t)syscall3(SYSCALL_DISPLAY_KMS_MIRROR,
                              (uint64_t)(uintptr_t)pixels,
                              (uint64_t)width, (uint64_t)height);
+}
+
+int32_t input_evdev_inject(uint32_t device, uint16_t type, uint16_t code,
+                           int32_t value)
+{
+    return (int32_t)hal_syscall4(SYSCALL_EVDEV_INJECT, (uint64_t)device,
+                                 (uint64_t)type, (uint64_t)code,
+                                 (uint64_t)(uint32_t)value);
 }
 
 int32_t display_kms_mirror_take_dirty(void)

@@ -67,6 +67,9 @@
  */
 #define CHROME_PATH "/Userland/Chromium/Resource/chrome"
 
+/* The page Chromium opens at start. */
+#define CHROME_START_URL "http://example.com/"
+
 #define CHROME_WINDOW_W 1024u
 #define CHROME_WINDOW_H 680u
 
@@ -79,7 +82,7 @@
     "--no-first-run --no-default-browser-check --disable-sync " \
     "--disable-background-networking --disable-component-update " \
     "--disable-breakpad --disable-crash-reporter " \
-    "--disable-crashpad-for-testing about:blank"
+    "--disable-crashpad-for-testing " CHROME_START_URL
 
 void _start(void)
 {
