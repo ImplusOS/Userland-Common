@@ -29,28 +29,21 @@
  * split (no quoting is available -- see ProcessManager_Create.c's comment
  * next to LINUX_ARGV_MAX).
  *
- *   --no-sandbox            required: there is no seccomp/user-namespace
- *                           support to sandbox into.
+ * THE COMMAND LINE
+ *
+ * A plain desktop Chromium command line: a URL, a window and a profile. None
+ * of the switches that used to hold Chromium back are needed any more --
+ * it runs with its namespace sandbox, a separate GPU process (falling back to
+ * SwiftShader on its own, there being no GPU), renderers forked from the
+ * zygote, the first-run flow, Sync/background networking/component updates
+ * and the out-of-process Crashpad handler, exactly as on a Linux desktop.
+ * What each of those needed from the kernel is in
+ * Docs/Others/TODO_Chromium_LinuxABI.md sections 11 and 12.
+ *
  *   --ozone-platform=x11    the only Ozone backend a prebuilt Chromium ships
  *                           that ImplusOS can host (headless is the other,
- *                           and paints nothing to look at).
- *   --disable-gpu           there is no real GPU; composite in software and
- *                           request no GL implementation at all. Do NOT pass
- *                           --use-gl=swiftshader here: Chromium 155 no longer
- *                           accepts it, so GL resolves to none, the only
- *                           allowed implementation on Ozone/X11 is
- *                           (gl=egl-angle,angle=default), and the in-process
- *                           GPU thread dies with
- *                           "gl_factory_ozone.cc:62] NOTREACHED hit. Expected
- *                           Mock or Stub, actual:0" about 50 s after start.
- *   --single-process --no-zygote
- *                           COW fork is implemented but disabled by default
- *                           (KERNEL_COW_FORK=0): a zygote fork per renderer
- *                           would eager-copy the ~330 MB resident image on
- *                           every tab. Running the renderer in the browser
- *                           process sidesteps that entirely; the tab strip,
- *                           omnibox and toolbar are browser-process UI either
- *                           way.
+ *                           and paints nothing to look at). Not a workaround:
+ *                           X11 is how this system does graphics.
  *   --window-position=0,0 --window-size=...
  *                           there is no X window manager inside the Xorg
  *                           instance XSession starts, so Chromium has to be
@@ -58,12 +51,10 @@
  *   --user-data-dir=/tmp/chrome-profile
  *                           HOME=/tmp is tmpfs-backed and writable; naming
  *                           the profile dir explicitly avoids depending on
- *                           Chromium's default (~/.config/google-chrome).
- *   --no-first-run --no-default-browser-check --disable-sync
- *   --disable-background-networking --disable-component-update
- *                           skip first-run flows and network calls this
- *                           environment cannot serve (no real DNS/TLS to
- *                           Google's update/sync backends).
+ *                           Chromium's default (~/.config/chromium).
+ *
+ * Chromium runs as uid/gid 1000 (CHROME_UID below): it refuses to start its
+ * sandbox as root. The X server it connects to keeps running as root.
  */
 #define CHROME_PATH "/Userland/Chromium/Resource/chrome"
 
@@ -73,16 +64,15 @@
 #define CHROME_WINDOW_W 1024u
 #define CHROME_WINDOW_H 680u
 
+/* The uid/gid Chromium runs as (the "implus" account in /etc/passwd).
+ * Chromium will not start its sandbox as root. */
+#define CHROME_UID 1000u
+#define CHROME_GID 1000u
+
 #define CHROME_ARGS \
-    "--no-sandbox --disable-gpu " \
     "--ozone-platform=x11 " \
-    "--single-process --no-zygote " \
     "--window-position=0,0 --window-size=1024,680 " \
-    "--user-data-dir=/tmp/chrome-profile " \
-    "--no-first-run --no-default-browser-check --disable-sync " \
-    "--disable-background-networking --disable-component-update " \
-    "--disable-breakpad --disable-crash-reporter " \
-    "--disable-crashpad-for-testing " CHROME_START_URL
+    "--user-data-dir=/tmp/chrome-profile " CHROME_START_URL
 
 void _start(void)
 {
@@ -93,6 +83,10 @@ void _start(void)
         serial_write_string("[chromium] no X server; giving up\n");
         process_exit(1);
     }
+
+    /* After the X server is up (it keeps running as root), before Chromium
+     * is spawned: everything Chromium starts inherits this. */
+    (void)process_set_credentials(CHROME_UID, CHROME_GID);
 
     int32_t status = xsession_run(&session, CHROME_PATH, CHROME_ARGS);
     if (status < 0) {

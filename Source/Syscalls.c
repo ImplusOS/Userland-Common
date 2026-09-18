@@ -365,6 +365,12 @@ int32_t display_kms_set_mirror(void *pixels, uint32_t width, uint32_t height)
                              (uint64_t)width, (uint64_t)height);
 }
 
+int32_t process_set_credentials(uint32_t uid, uint32_t gid)
+{
+    return (int32_t)syscall2(SYSCALL_SET_CREDENTIALS, (uint64_t)uid,
+                             (uint64_t)gid);
+}
+
 int32_t input_evdev_inject(uint32_t device, uint16_t type, uint16_t code,
                            int32_t value)
 {
