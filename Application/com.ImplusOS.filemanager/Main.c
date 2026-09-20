@@ -35,6 +35,14 @@ static imui_app_t    *g_app;
 
 static const char *EDITOR = "/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF";
 
+/* The user's home as Linux programs see it: HOME=/tmp in the environment
+ * the kernel gives them (ProcessManager_Create.c), so this is where Chromium
+ * saves downloads ($HOME/Downloads) and where GTK/xterm keep their files.
+ * Without these two places a finished download was nowhere to be found:
+ * /tmp is not under any of the other entries. */
+#define HOME_DIR      "/tmp"
+#define DOWNLOADS_DIR "/tmp/Downloads"
+
 /* ---- helpers ---- */
 
 static bool is_text_name(const char *n) {
@@ -202,9 +210,20 @@ static void on_place(imui_app_t *a, imui_widget_t *w, void *u) {
     (void)a;
     int sel = imui_list_selected(w);
     if (sel < 0) return;
-    const char *paths[] = { "/", "/Userland", "/var", "/run", "/BootManager" };
-    if ((unsigned)sel < sizeof(paths)/sizeof(paths[0]))
-        navigate(paths[sel], true);
+    const char *paths[] = { HOME_DIR, DOWNLOADS_DIR, "/", "/Userland", "/var",
+                            "/run", "/BootManager" };
+    if ((unsigned)sel < sizeof(paths)/sizeof(paths[0])) {
+        const char *p = paths[sel];
+        /* Chromium creates its Downloads folder on the first download;
+         * until then, show the folder anyway rather than refuse. */
+        if (strcmp(p, DOWNLOADS_DIR) == 0) {
+            file_stat_t st;
+            if (file_stat(p, &st) < 0 || !st.exists) {
+                (void)file_mkdir(p);
+            }
+        }
+        navigate(p, true);
+    }
     (void)u;
 }
 
@@ -237,6 +256,8 @@ int _start(void) {
     imui_widget_t *places = imui_list(body);
     places->grow = 0; places->min_w = 190;
     places->on_activate = on_place;
+    imui_list_add(places, IMUI_ICON_FOLDER, "Home", HOME_DIR);
+    imui_list_add(places, IMUI_ICON_FOLDER, "Downloads", DOWNLOADS_DIR);
     imui_list_add(places, IMUI_ICON_DRIVE, "This PC", "/");
     imui_list_add(places, IMUI_ICON_FOLDER, "Userland", "/Userland");
     imui_list_add(places, IMUI_ICON_FOLDER, "Var", "/var");
@@ -252,6 +273,17 @@ int _start(void) {
     sb->grow = 0; sb->min_h = 24; sb->fill_bg = true;
     w_status = imui_label(sb, "");
 
-    navigate("/", false);
+    /* Started with a folder (xdg-open, "Show in folder"): open on it. */
+    {
+        char start[PATH_MAX];
+        file_stat_t st;
+        if (process_get_launch_argument(start, sizeof(start)) > 0 &&
+            start[0] == '/' && file_stat(start, &st) >= 0 && st.exists &&
+            st.is_dir) {
+            navigate(start, false);
+        } else {
+            navigate("/", false);
+        }
+    }
     return imui_run(g_app);
 }

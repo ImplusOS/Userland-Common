@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "File.h"
 #include "Process.h"
 #include "Serial.h"
 #include "XSession.h"
@@ -52,6 +53,16 @@
  *                           HOME=/tmp is tmpfs-backed and writable; naming
  *                           the profile dir explicitly avoids depending on
  *                           Chromium's default (~/.config/chromium).
+ *   --ignore-gpu-blocklist  turn the GPU process's work on. The GL driver
+ *                           here is Mesa (llvmpipe under QEMU, which has no
+ *                           GPU of its own), and Chromium's software
+ *                           rendering list disables every GPU feature for it:
+ *                           compositing, rasterization, canvas, WebGL, WebGPU
+ *                           and video decode all fell back to the browser's
+ *                           software paths. With it they run in the GPU
+ *                           process through ANGLE/Mesa (chrome://gpu reports
+ *                           them "Hardware accelerated"); on real hardware
+ *                           with a Mesa driver it is the actual GPU.
  *
  * Chromium runs as uid/gid 1000 (CHROME_UID below): it refuses to start its
  * sandbox as root. The X server it connects to keeps running as root.
@@ -69,10 +80,60 @@
 #define CHROME_UID 1000u
 #define CHROME_GID 1000u
 
-#define CHROME_ARGS \
+#define CHROME_BASE_ARGS \
     "--ozone-platform=x11 " \
     "--window-position=0,0 --window-size=1024,680 " \
-    "--user-data-dir=/tmp/chrome-profile " CHROME_START_URL
+    "--user-data-dir=/tmp/chrome-profile " \
+    "--ignore-gpu-blocklist"
+
+/* Optional: when this file exists its contents (switches and/or URLs,
+ * whitespace separated, newlines allowed) take the place of
+ * CHROME_START_URL. A way to open a different page -- or add a switch --
+ * without rebuilding the launcher. Not shipped by default. */
+#define CHROME_LAUNCH_ARGS_FILE "/Userland/Chromium/Resource/launch.args"
+
+static char g_args[512]; /* process_t.launch_argument */
+
+static uint32_t append(uint32_t at, const char *text, uint32_t len)
+{
+    for (uint32_t i = 0; i < len && at + 1u < sizeof(g_args); ++i) {
+        char c = text[i];
+        if (c == '\n' || c == '\r' || c == '\t') {
+            c = ' ';
+        }
+        g_args[at++] = c;
+    }
+    g_args[at] = '\0';
+    return at;
+}
+
+static uint32_t cstrlen(const char *s)
+{
+    uint32_t n = 0;
+    while (s[n] != '\0') {
+        ++n;
+    }
+    return n;
+}
+
+static const char *build_args(void)
+{
+    uint32_t at = append(0, CHROME_BASE_ARGS " ", cstrlen(CHROME_BASE_ARGS " "));
+    char extra[400];
+    int64_t got = -1;
+    int32_t fd = file_open(CHROME_LAUNCH_ARGS_FILE, 0);
+    if (fd >= 0) {
+        got = file_read(fd, extra, sizeof(extra) - 1u);
+        (void)file_close(fd);
+    }
+    if (got > 0) {
+        serial_write_string("[chromium] using " CHROME_LAUNCH_ARGS_FILE "\n");
+        (void)append(at, extra, (uint32_t)got);
+    } else {
+        (void)append(at, CHROME_START_URL, cstrlen(CHROME_START_URL));
+    }
+    return g_args;
+}
 
 void _start(void)
 {
@@ -88,7 +149,7 @@ void _start(void)
      * is spawned: everything Chromium starts inherits this. */
     (void)process_set_credentials(CHROME_UID, CHROME_GID);
 
-    int32_t status = xsession_run(&session, CHROME_PATH, CHROME_ARGS);
+    int32_t status = xsession_run(&session, CHROME_PATH, build_args());
     if (status < 0) {
         serial_write_string("[chromium] could not start chrome\n");
     }
