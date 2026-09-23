@@ -50,6 +50,16 @@ typedef struct {
 
 static window_backing_mapping_t g_window_backing_mappings[256];
 
+/* Latest WM_WINDOW_RESIZED seen on this process's IPC port, kept the same way
+ * input events are: consumed off the port by whichever poll runs first, read
+ * back by window_poll_resize(). Only the newest one matters -- an interactive
+ * resize sends one per pointer frame and every earlier size is already
+ * stale by the time the client looks. */
+static window_id_t g_resize_window_id;
+static uint32_t    g_resize_width;
+static uint32_t    g_resize_height;
+static bool        g_resize_pending;
+
 extern uint64_t syscall0(uint64_t num);
 extern uint64_t syscall1(uint64_t num, uint64_t arg1);
 extern uint64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2);
@@ -112,6 +122,16 @@ static bool handle_input_message(const ipc_message_t *msg)
             g_mouse_head = (g_mouse_head + 1u) % MAX_INPUT_QUEUE;
             ++g_mouse_count;
         }
+        return true;
+    }
+    if (hdr->type == WM_WINDOW_RESIZED) {
+        if (msg->size < sizeof(wm_window_resized_t)) return true;
+        const wm_window_resized_t *event =
+            (const wm_window_resized_t *)(const void *)msg->data;
+        g_resize_window_id = event->header.window_id;
+        g_resize_width     = event->width;
+        g_resize_height    = event->height;
+        g_resize_pending   = true;
         return true;
     }
     return false;
@@ -248,6 +268,16 @@ __attribute__((unused)) int64_t file_write(int32_t fd, const void *buffer, uint6
 __attribute__((unused)) int32_t file_close(int32_t fd)
 {
     return os_errno_from_i32_status((int32_t)syscall1(SYSCALL_FILE_CLOSE, (uint64_t)fd));
+}
+
+/* ftruncate(2). Present because the open flags carry no truncate bit: a
+ * shorter file_write() over a longer file otherwise leaves the previous
+ * contents' tail in place, and the only other way out -- unlink and recreate
+ * -- throws the file away if the create then fails. */
+__attribute__((unused)) int32_t file_truncate(int32_t fd, uint64_t length)
+{
+    return os_errno_from_i32_status((int32_t)syscall2(SYSCALL_FTRUNCATE,
+                                                      (uint64_t)fd, length));
 }
 
 __attribute__((unused)) int32_t file_mkdir(const char *path)
@@ -1233,6 +1263,34 @@ void window_show_dialog(uint32_t type, const char *title, const char *message)
     ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
 }
 
+/* Retint the desktop. The seed is all the window manager needs: it expands
+ * it into the full set of Material Design 3 colour roles itself
+ * (API/Source/Material.h), so a caller picks one colour rather than trying
+ * to stay consistent across a dozen. */
+void window_set_theme_seed(uint32_t seed, bool dark)
+{
+    struct {
+        wm_msg_header_t hdr;
+        uint32_t seed;
+        uint32_t dark;
+    } cmd;
+
+    cmd.hdr.type = WM_SET_THEME;
+    cmd.hdr.window_id = 0;
+    cmd.seed = seed;
+    cmd.dark = dark ? 1u : 0u;
+
+    ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
+}
+
+void window_reload_background(void)
+{
+    wm_msg_header_t hdr;
+    hdr.type = WM_RELOAD_BACKGROUND;
+    hdr.window_id = 0;
+    ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
+}
+
 void window_show_info(const char *title, const char *message)
 {
     window_show_dialog(0u, title, message);
@@ -1315,7 +1373,8 @@ static uint32_t *window_get_backing_store_internal(window_id_t wid, uint32_t *ou
                         return NULL;
                     }
 
-                    window_backing_mapping_t *free_slot = NULL;
+                    window_backing_mapping_t *slot = NULL;
+                    window_backing_mapping_t *stale = NULL;
                     for (uint32_t i = 0u;
                          i < sizeof(g_window_backing_mappings) /
                              sizeof(g_window_backing_mappings[0]);
@@ -1330,27 +1389,34 @@ static uint32_t *window_get_backing_store_internal(window_id_t wid, uint32_t *ou
                                 os_clear_errno();
                                 return mapping->address;
                             }
-                            (void)os_shared_memory_unmap(
-                                mapping->handle, mapping->address);
-                            memset(mapping, 0, sizeof(*mapping));
-                            free_slot = mapping;
+                            stale = mapping;
+                            slot = mapping;
                             break;
                         }
-                        if (!free_slot && mapping->window_id == 0u)
-                            free_slot = mapping;
+                        if (!slot && mapping->window_id == 0u)
+                            slot = mapping;
                     }
-                    if (!free_slot) {
+                    if (!slot) {
                         os_set_errno(ENOBUFS);
                         return NULL;
                     }
 
+                    /* Map the replacement before dropping the mapping it
+                     * replaces. The other order left the caller holding a
+                     * pointer into an unmapped range whenever the new map
+                     * failed -- and on the resize path, where this runs, the
+                     * caller goes straight back to drawing through it. */
                     uint32_t *address = (uint32_t *)os_shared_memory_map(
                         response->shared_memory_handle);
                     if (!address) return NULL;
-                    free_slot->window_id = wid;
-                    free_slot->handle = response->shared_memory_handle;
-                    free_slot->address = address;
-                    free_slot->size_bytes = response->size_bytes;
+                    if (stale) {
+                        (void)os_shared_memory_unmap(stale->handle,
+                                                     stale->address);
+                    }
+                    slot->window_id = wid;
+                    slot->handle = response->shared_memory_handle;
+                    slot->address = address;
+                    slot->size_bytes = response->size_bytes;
                     if (out_w) *out_w = response->width;
                     if (out_h) *out_h = response->height;
                     os_clear_errno();
@@ -1389,6 +1455,23 @@ uint32_t *window_get_backing_store(window_id_t wid, uint32_t *out_w, uint32_t *o
     }
 
     return NULL;
+}
+
+int32_t window_poll_resize(window_id_t wid, uint32_t *out_w, uint32_t *out_h)
+{
+    ipc_message_t message;
+    uint32_t drain_count = 0u;
+    while (drain_count < IPC_DRAIN_MAX && ipc_receive_raw(&message) == 0) {
+        preserve_unhandled_message(&message);
+        ++drain_count;
+    }
+
+    if (!g_resize_pending) return 0;
+    if (wid != 0u && g_resize_window_id != wid) return 0;
+    g_resize_pending = false;
+    if (out_w) *out_w = g_resize_width;
+    if (out_h) *out_h = g_resize_height;
+    return 1;
 }
 
 void window_release_backing_store(window_id_t wid)

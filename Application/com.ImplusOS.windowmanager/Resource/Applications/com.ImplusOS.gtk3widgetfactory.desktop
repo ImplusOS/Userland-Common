@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GTK3 Widget Factory
+Comment=Every GTK3 widget in one window, on Wayland
+Comment[ja]=GTK3 の全ウィジェットを 1 枚に並べたもの（Wayland）
+Exec=/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF /usr/bin/gtk3-widget-factory
+Icon=gtk3-widget-factory
+Categories=Development;GTK;
+X-ImplusOS-Linux=true

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Doom
+Comment=Unmodified linuxxdoom through Xorg and Mesa
+Comment[ja]=無改変の linuxxdoom を Xorg + Mesa で動かす
+Exec=/Userland/Doom/Doom.ELF
+Icon=applications-games
+Categories=Game;
+X-ImplusOS-Linux=true

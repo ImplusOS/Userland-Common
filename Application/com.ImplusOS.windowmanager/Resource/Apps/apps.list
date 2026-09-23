@@ -1,11 +1,26 @@
-# Display name|ELF path|fallback badge
-Files|/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF|FM
-Editor|/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF|ED
-BusyBox|/Userland/BusyBox/BusyBox.ELF|BB
-Terminal|/Userland/Terminal/Terminal.ELF|TE
-Doom|/Userland/Doom/Doom.ELF|DM
-Chromium|/Userland/Chromium/Chromium.ELF|CR
-GTK3 Demo|/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF|GK
-Wayland Compositor|/Userland/com.ImplusOS.waylandcompositor/com.ImplusOS.waylandcompositor.ELF|WL
-FastFetch|/Userland/FastFetch/FastFetch.ELF|FF
-Serial Monitor|/Userland/com.ImplusOS.serialmonitor/com.ImplusOS.serialmonitor.ELF|SM
+# Legacy launcher list.
+#
+# The Start menu is built from freedesktop.org desktop entries now -- see
+# ../Applications/ and Linux/WM_DesktopEntry.c -- and this file is only read
+# when that scan finds nothing at all, which means a damaged or incomplete
+# image. Keeping it means such an image still boots to a usable menu.
+#
+# Format: Name|Path|Badge|Category|Comment|Argument
+#   Category is a wm_app_category_t ordinal (Core/WM_State.h):
+#   0 system, 1 internet, 2 development, 3 graphics, 4 multimedia,
+#   5 office, 6 game, 7 utility, 8 other. Everything after Badge is
+#   optional; a three-field line written before those existed still parses.
+Files|/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF|FM|7|ファイルとフォルダーを開く
+Editor|/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF|ED|7|テキストファイルを編集する
+Terminal|/Userland/Terminal/Terminal.ELF|TE|7|Linux ABI 上の xterm
+BusyBox|/Userland/BusyBox/BusyBox.ELF|BB|7|ネイティブのシェルセッション
+Doom|/Userland/Doom/Doom.ELF|DM|6|無改変の linuxxdoom
+Chromium|/Userland/Chromium/Chromium.ELF|CR|1|無改変の Linux 版 Chromium
+FireFox|/Userland/FireFox/FireFox.ELF|FX|1|無改変の Linux 版 FireFox
+GTK3 Demo|/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF|GK|2|GTK3 ウィジェット集|/usr/bin/gtk3-demo
+Wayland Compositor|/Userland/com.ImplusOS.waylandcompositor/com.ImplusOS.waylandcompositor.ELF|WL|0|Wayland ディスプレイサーバ
+FastFetch|/Userland/FastFetch/FastFetch.ELF|FF|0|システム情報表示
+Serial Monitor|/Userland/com.ImplusOS.serialmonitor/com.ImplusOS.serialmonitor.ELF|SM|0|COM1 デバッグ出力
+Settings|/Userland/com.ImplusOS.settings/com.ImplusOS.settings.ELF|ST|0|配色とシステム情報
+Calculator|/Userland/com.ImplusOS.calculator/com.ImplusOS.calculator.ELF|Ca|7|式で計算する電卓
+Process Manager|/Userland/com.ImplusOS.processmanager/com.ImplusOS.processmanager.ELF|PM|0|実行中のプロセスを確認して終了する

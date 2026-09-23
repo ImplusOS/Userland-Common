@@ -36,6 +36,8 @@ COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/sys/$(ARCH)/setjmp.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/assert.o \
                $(COMMON_LIBS_DIR)/API/XMLParser.o \
+               $(COMMON_LIBS_DIR)/API/Material.o \
+               $(COMMON_LIBS_DIR)/API/MaterialTheme.o \
                $(COMMON_LIBS_DIR)/API/ImUI.o \
                $(COMMON_LIBS_DIR)/API/XSession.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/math.o \

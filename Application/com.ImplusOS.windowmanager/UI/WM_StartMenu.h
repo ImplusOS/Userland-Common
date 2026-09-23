@@ -21,3 +21,12 @@ bool wm_start_menu_scroll(wm_state_t *state, int32_t rows);
 void wm_start_menu_clamp_scroll(wm_state_t *state);
 bool wm_start_menu_input_char(wm_state_t *state, char ch);
 bool wm_start_menu_input_backspace(wm_state_t *state);
+
+/* Move the keyboard selection by `delta` application rows, skipping section
+ * headings and scrolling to keep the selection visible. Returns true if the
+ * menu needs repainting. */
+bool wm_start_menu_move_selection(wm_state_t *state, int32_t delta);
+
+/* Launch the selected entry, or the first result when none is selected.
+ * Returns the new pid, or a negative value when nothing matched. */
+int32_t wm_start_menu_launch_selected(wm_state_t *state);

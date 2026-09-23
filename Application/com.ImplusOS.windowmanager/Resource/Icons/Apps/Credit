@@ -1,0 +1,16 @@
+Application icons the shell ships for programs that do not install one of
+their own into an icon theme. Named after the entry's Icon= key, which is
+what Linux/WM_DesktopEntry.c looks up here first.
+
+chromium.png
+    chrome/app/theme/chromium/product_logo_128.png from the Chromium source
+    tree (BSD-3-Clause, https://chromium.googlesource.com/chromium/src).
+    Chromium's own product icon, unmodified -- the Debian package staged by
+    Vendor/LinuxRuntime does not install one.
+
+firefox.png
+    browser/chrome/icons/default/default128.png from the Firefox tarball
+    staged in Userland/Application/FireFox/Resource (Mozilla tri-license;
+    https://www.mozilla.org/MPL/). Firefox's own window/product icon,
+    unmodified -- it is what Icon=firefox in the entry names, and the shell
+    only reads PNGs out of its own Resource/Icons/Apps.

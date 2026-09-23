@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GTK3 Demo
+Comment=GTK3 widget tour on the Wayland compositor
+Comment[ja]=Wayland コンポジタ上で動く GTK3 ウィジェット集
+Exec=/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF /usr/bin/gtk3-demo
+Icon=gtk3-demo
+Categories=Development;GTK;
+X-ImplusOS-Linux=true

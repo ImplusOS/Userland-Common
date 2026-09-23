@@ -102,20 +102,25 @@ static void render_xml_node(wm_state_t *state, wm_window_t *window,
     uint32_t width = parse_unsigned(w_text,
         x < (int32_t)window->frame.w ? window->frame.w - (uint32_t)x : 0u);
     uint32_t height = parse_unsigned(h_text, 24u);
-    uint32_t color = wm_theme_parse_color(color_text, state->theme.text);
+    uint32_t color = wm_theme_parse_color(color_text, state->theme.color.on_surface);
     uint32_t background = wm_theme_parse_color(background_text, 0x00000000u);
-    float font_size = parse_float_value(font_text, state->theme.font_normal);
+    float font_size = parse_float_value(font_text, state->theme.type.body_medium);
     bool is_panel = strcmp(node->tag, "Panel") == 0;
     bool is_button = strcmp(node->tag, "Button") == 0;
     bool is_rect = strcmp(node->tag, "Rect") == 0;
     bool is_label = strcmp(node->tag, "Label") == 0;
 
     wm_rect_t rect = {x, y, width, height};
+    /* The XML widget set follows the same M3 shapes as the rest of the
+     * shell: a panel is a "medium" container, a button a full stadium on
+     * secondary-container unless the markup names its own colour. */
     if (is_panel)
-        wm_canvas_fill_rounded(canvas, rect, 8u, background);
+        wm_canvas_fill_rounded(canvas, rect,
+            m3_shape_radius(M3_SHAPE_MEDIUM, rect.w, rect.h), background);
     else if (is_button)
-        wm_canvas_fill_rounded(canvas, rect, 7u,
-            background ? background : state->theme.accent_soft);
+        wm_canvas_fill_rounded(canvas, rect,
+            m3_shape_radius(M3_SHAPE_FULL, rect.w, rect.h),
+            background ? background : state->theme.color.secondary_container);
     else if (is_rect)
         wm_canvas_fill(canvas, rect, background);
 
@@ -570,24 +575,19 @@ void wm_ipc_handle_message(wm_state_t *state, const ipc_message_t *message)
         break;
     }
     case WM_SET_THEME: {
+        /* One colour in, five tonal palettes and the whole set of M3 roles
+         * out -- so a caller that wants to retint the desktop picks a seed
+         * rather than trying to stay consistent across a dozen fields, and
+         * everything derived from the scheme moves with it. */
         struct theme_message {
             wm_msg_header_t header;
-            uint32_t bg_top, bg_mid, bg_bottom, accent;
-            uint32_t title_top, title_bottom;
+            uint32_t seed;
+            uint32_t dark;
         };
         if (!message_has(message, sizeof(struct theme_message))) break;
         const struct theme_message *command = (const void *)message->data;
-        state->theme.bg_top = command->bg_top;
-        state->theme.bg_mid = command->bg_mid;
-        state->theme.bg_bottom = command->bg_bottom;
-        state->theme.accent = command->accent;
-        state->theme.border_focus = command->accent;
-        state->theme.accent_soft = wm_color_lerp(
-            state->theme.surface_alt, command->accent, 1u, 3u);
-        state->theme.title_active = wm_color_lerp(
-            state->theme.surface, command->title_top, 1u, 4u);
-        state->theme.title_inactive = state->theme.surface;
-        (void)command->title_bottom;
+        wm_theme_set_seed(&state->theme, command->seed, command->dark != 0u);
+        wm_compositor_generate_background(state);
         wm_compositor_damage_all(state);
         break;
     }

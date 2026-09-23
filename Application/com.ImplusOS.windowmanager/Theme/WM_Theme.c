@@ -52,6 +52,18 @@ static float parse_float(const char *text, float fallback)
     return any ? (float)whole + (float)fraction / (float)divisor : fallback;
 }
 
+static bool parse_bool(const char *text, bool fallback)
+{
+    if (!text || !*text) return fallback;
+    if (strcmp(text, "dark") == 0 || strcmp(text, "Dark") == 0 ||
+        strcmp(text, "true") == 0 || strcmp(text, "1") == 0 ||
+        strcmp(text, "yes") == 0) return true;
+    if (strcmp(text, "light") == 0 || strcmp(text, "Light") == 0 ||
+        strcmp(text, "false") == 0 || strcmp(text, "0") == 0 ||
+        strcmp(text, "no") == 0) return false;
+    return fallback;
+}
+
 uint32_t wm_theme_parse_color(const char *text, uint32_t fallback)
 {
     if (!text) return fallback;
@@ -75,68 +87,92 @@ uint32_t wm_theme_parse_color(const char *text, uint32_t fallback)
     return (digits == 6u || digits == 8u) ? value : fallback;
 }
 
+/* -------------------------------------------------------------- defaults */
+
+void wm_theme_set_type_scale(wm_theme_t *theme, float scale)
+{
+    if (!theme) return;
+    if (!(scale > 0.1f) || scale > 4.0f) scale = 1.0f;
+    theme->type_scale = scale;
+    m3_typescale_init(&theme->type, scale);
+}
+
+void wm_theme_set_seed(wm_theme_t *theme, uint32_t seed, bool dark)
+{
+    if (!theme) return;
+    /* A seed arriving without an alpha channel is still a colour; the
+     * palettes only ever look at its RGB. */
+    theme->seed = seed | 0xFF000000u;
+    theme->dark = dark;
+    m3_scheme_init(&theme->color, theme->seed, dark);
+}
+
 void wm_theme_set_defaults(wm_theme_t *theme)
 {
     if (!theme) return;
-    *theme = (wm_theme_t){
-        .bg_top = 0xFFFAFAFAu,
-        .bg_mid = 0xFFF5F5F5u,
-        .bg_bottom = 0xFFEEEEEEu,
-        .bg_glow = 0xFFFFFFFFu,
-        .surface = 0xFFFFFFFFu,
-        .surface_alt = 0xFFF3F4F6u,
-        .surface_hover = 0x18000000u,
-        .title_active = 0xFFFFFFFFu,
-        .title_inactive = 0xFFF8F9FAu,
-        .border = 0x22000000u,
-        .border_focus = 0xFF1C1B1Fu,
-        .accent = 0xFF1C1B1Fu,
-        .accent_alt = 0xFF49454Fu,
-        .accent_soft = 0x16000000u,
-        .text = 0xFF1C1B1Fu,
-        .text_dim = 0xFF49454Fu,
-        .danger = 0xFFB3261Eu,
-        .shadow = 0x28000000u,
-        .dock = 0xF8FFFFFFu,
-        .dock_border = 0x18000000u,
-        .notification = 0xF8FFFFFFu,
-        .title_height = 36u,
-        .corner_radius = 12u,
-        .shadow_size = 10u,
-        .dock_height = 20u,
-        .font_normal = 13.0f,
-        .font_small = 11.0f,
-        .font_title = 13.0f,
-    };
+    memset(theme, 0, sizeof(*theme));
+    wm_theme_set_seed(theme, M3_SEED_BASELINE, false);
+    wm_theme_set_type_scale(theme, 1.0f);
+    theme->title_height  = WM_TITLE_HEIGHT;
+    theme->corner_radius = WM_CORNER_RADIUS;
+    theme->shadow_size   = WM_SHADOW_SIZE;
+    theme->dock_height   = WM_DOCK_HEIGHT;
 }
 
-static void apply_value(wm_theme_t *theme, const char *key, const char *value)
-{
-#define COLOR_FIELD(name) \
-    if (strcmp(key, #name) == 0) { theme->name = wm_theme_parse_color(value, theme->name); return; }
-    COLOR_FIELD(bg_top)
-    COLOR_FIELD(bg_mid)
-    COLOR_FIELD(bg_bottom)
-    COLOR_FIELD(bg_glow)
-    COLOR_FIELD(surface)
-    COLOR_FIELD(surface_alt)
-    COLOR_FIELD(surface_hover)
-    COLOR_FIELD(title_active)
-    COLOR_FIELD(title_inactive)
-    COLOR_FIELD(border)
-    COLOR_FIELD(border_focus)
-    COLOR_FIELD(accent)
-    COLOR_FIELD(accent_alt)
-    COLOR_FIELD(accent_soft)
-    COLOR_FIELD(text)
-    COLOR_FIELD(text_dim)
-    COLOR_FIELD(danger)
-    COLOR_FIELD(shadow)
-    COLOR_FIELD(dock)
-    COLOR_FIELD(dock_border)
-    COLOR_FIELD(notification)
-#undef COLOR_FIELD
+/* --------------------------------------------------------------- parsing */
 
+/* Per-role overrides. A theme that just wants a different accent sets
+ * `seed` and is done; these exist for the rarer case of a hand-tuned
+ * scheme, and they are applied after the seed so they win. */
+static bool apply_color_override(m3_scheme_t *scheme,
+                                 const char *key, const char *value)
+{
+#define ROLE(name) \
+    if (strcmp(key, #name) == 0) { \
+        scheme->name = wm_theme_parse_color(value, scheme->name); \
+        return true; \
+    }
+    ROLE(primary)
+    ROLE(on_primary)
+    ROLE(primary_container)
+    ROLE(on_primary_container)
+    ROLE(secondary)
+    ROLE(on_secondary)
+    ROLE(secondary_container)
+    ROLE(on_secondary_container)
+    ROLE(tertiary)
+    ROLE(on_tertiary)
+    ROLE(tertiary_container)
+    ROLE(on_tertiary_container)
+    ROLE(error)
+    ROLE(on_error)
+    ROLE(error_container)
+    ROLE(on_error_container)
+    ROLE(surface)
+    ROLE(on_surface)
+    ROLE(surface_variant)
+    ROLE(on_surface_variant)
+    ROLE(surface_dim)
+    ROLE(surface_bright)
+    ROLE(surface_container_lowest)
+    ROLE(surface_container_low)
+    ROLE(surface_container)
+    ROLE(surface_container_high)
+    ROLE(surface_container_highest)
+    ROLE(outline)
+    ROLE(outline_variant)
+    ROLE(inverse_surface)
+    ROLE(inverse_on_surface)
+    ROLE(inverse_primary)
+    ROLE(surface_tint)
+    ROLE(shadow)
+    ROLE(scrim)
+#undef ROLE
+    return false;
+}
+
+static void apply_metric(wm_theme_t *theme, const char *key, const char *value)
+{
     if (strcmp(key, "title_height") == 0)
         theme->title_height = parse_u32(value, theme->title_height);
     else if (strcmp(key, "corner_radius") == 0)
@@ -145,12 +181,45 @@ static void apply_value(wm_theme_t *theme, const char *key, const char *value)
         theme->shadow_size = parse_u32(value, theme->shadow_size);
     else if (strcmp(key, "dock_height") == 0)
         theme->dock_height = parse_u32(value, theme->dock_height);
-    else if (strcmp(key, "font_normal") == 0)
-        theme->font_normal = parse_float(value, theme->font_normal);
-    else if (strcmp(key, "font_small") == 0)
-        theme->font_small = parse_float(value, theme->font_small);
-    else if (strcmp(key, "font_title") == 0)
-        theme->font_title = parse_float(value, theme->font_title);
+}
+
+/* Walk the file, handing every `key = value` line to `visit`. */
+static void for_each_setting(char *buffer, wm_theme_t *theme,
+                             void (*visit)(wm_theme_t *, const char *, const char *))
+{
+    char *line = buffer;
+    while (*line) {
+        char *next = strchr(line, '\n');
+        if (next) *next++ = '\0';
+        char *clean = trim(line);
+        if (*clean && *clean != ';' && *clean != '#' && *clean != '[') {
+            char *equals = strchr(clean, '=');
+            if (equals) {
+                *equals = '\0';
+                visit(theme, trim(clean), trim(equals + 1));
+            }
+        }
+        if (!next) break;
+        line = next;
+    }
+}
+
+/* Pass one: everything the palettes are generated from. */
+static void visit_generator(wm_theme_t *theme, const char *key, const char *value)
+{
+    if (strcmp(key, "seed") == 0)
+        theme->seed = wm_theme_parse_color(value, theme->seed) | 0xFF000000u;
+    else if (strcmp(key, "mode") == 0)
+        theme->dark = parse_bool(value, theme->dark);
+    else if (strcmp(key, "type_scale") == 0)
+        theme->type_scale = parse_float(value, theme->type_scale);
+}
+
+/* Pass two: the metrics and any per-role colour overrides. */
+static void visit_override(wm_theme_t *theme, const char *key, const char *value)
+{
+    if (apply_color_override(&theme->color, key, value)) return;
+    apply_metric(theme, key, value);
 }
 
 bool wm_theme_load(wm_theme_t *theme, const char *path)
@@ -174,28 +243,30 @@ bool wm_theme_load(wm_theme_t *theme, const char *path)
     }
     buffer[(size_t)read_bytes] = '\0';
 
-    char *line = buffer;
-    while (*line) {
-        char *next = strchr(line, '\n');
-        if (next) *next++ = '\0';
-        char *clean = trim(line);
-        if (*clean && *clean != ';' && *clean != '#' && *clean != '[') {
-            char *equals = strchr(clean, '=');
-            if (equals) {
-                *equals = '\0';
-                apply_value(theme, trim(clean), trim(equals + 1));
-            }
-        }
-        if (!next) break;
-        line = next;
+    /* The generator settings have to be read, and the scheme rebuilt,
+     * before any per-role override is applied -- otherwise re-seeding would
+     * throw the overrides away. for_each_setting() rewrites the buffer as
+     * it splits it, so pass two works on a copy. */
+    size_t length = (size_t)read_bytes;
+    char *second_pass = (char *)malloc(length + 1u);
+    if (second_pass) memcpy(second_pass, buffer, length + 1u);
+
+    for_each_setting(buffer, theme, visit_generator);
+    wm_theme_set_seed(theme, theme->seed, theme->dark);
+    wm_theme_set_type_scale(theme, theme->type_scale);
+
+    if (second_pass) {
+        for_each_setting(second_pass, theme, visit_override);
+        free(second_pass);
     }
     free(buffer);
 
-    if (theme->title_height < 28u) theme->title_height = 28u;
+    if (theme->title_height < 26u) theme->title_height = 26u;
     if (theme->title_height > 64u) theme->title_height = 64u;
-    if (theme->corner_radius > 30u) theme->corner_radius = 30u;
+    if (theme->corner_radius > M3_SHAPE_EXTRA_LARGE)
+        theme->corner_radius = M3_SHAPE_EXTRA_LARGE;
     if (theme->shadow_size > 36u) theme->shadow_size = 36u;
-    if (theme->dock_height < 20u) theme->dock_height = 20u;
+    if (theme->dock_height < 34u) theme->dock_height = 34u;
     if (theme->dock_height > 80u) theme->dock_height = 80u;
     return true;
 }

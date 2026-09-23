@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Name[ja]=ファイル
+Comment=Browse files and folders
+Comment[ja]=ファイルとフォルダーを開く
+Exec=/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF
+Icon=system-file-manager
+Categories=Utility;FileManager;

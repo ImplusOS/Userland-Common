@@ -2,6 +2,7 @@
 
 #include "../Compositor/WM_Damage.h"
 #include "../Core/WM_Display.h"
+#include "../Core/WM_Assets.h"
 #include "../SceneGraph/WM_Node.h"
 #include "../UI/WM_StartMenu.h"
 #include "../UI/WM_Taskbar.h"
@@ -11,6 +12,7 @@
 #include "../UI/WM_WifiPanel.h"
 #include "../../../../Userland/Source/Syscalls.h"
 #include "../../../../Userland/API/Source/Process.h"
+#include "../../../../Kernel/Source/include/kernel/keycodes.h"
 
 #include <string.h>
 
@@ -131,36 +133,18 @@ static void cycle_focus(wm_state_t *state)
     wm_window_t *candidate = current ? current->z_next :
         state->scene.layer_top[WM_LAYER_NORMAL];
     while (candidate && (!candidate->visible || candidate->minimized ||
-                         candidate->is_system || candidate->close_requested))
+                         candidate->close_requested))
         candidate = candidate->z_next;
     if (!candidate) {
         candidate = state->scene.layer_top[WM_LAYER_NORMAL];
         while (candidate && (!candidate->visible || candidate->minimized ||
-                             candidate->is_system || candidate->close_requested))
+                             candidate->close_requested))
             candidate = candidate->z_next;
     }
     if (candidate && candidate != current) {
         wm_scene_raise(state, candidate);
         wm_scene_focus(state, candidate);
     }
-}
-
-static bool str_icontains(const char *haystack, const char *needle)
-{
-    if (!needle || !needle[0]) return true;
-    if (!haystack) return false;
-    for (const char *h = haystack; *h; h++) {
-        const char *n = needle;
-        const char *p = h;
-        while (*n && *p) {
-            char ch = *p>='A'&&*p<='Z'?(char)(*p+32):*p;
-            char cn = *n>='A'&&*n<='Z'?(char)(*n+32):*n;
-            if (ch != cn) break;
-            n++; p++;
-        }
-        if (!*n) return true;
-    }
-    return false;
 }
 
 void wm_input_handle_keyboard(wm_state_t *state, const ipc_message_t *message)
@@ -195,8 +179,19 @@ void wm_input_handle_keyboard(wm_state_t *state, const ipc_message_t *message)
         damage_ui(state);
         return;
     }
-    if (event->pressed && (event->keycode == 0x5Bu || event->keycode == 0x5Cu)) {
+    /* Super opens and closes the Start menu.
+     *
+     * The kernel reports the two Meta keys as 0xE05B / 0xE05C -- PS/2 scan
+     * code set 1 with the 0xE0 prefix folded into the value, which is how
+     * both the PS/2 driver and USB HID's KEY_LEFTMETA arrive
+     * (Kernel/Source/include/kernel/keycodes.h). This used to compare
+     * against 0x5B / 0x5C, the unprefixed codes, which are keypad 3 and
+     * keypad 4: pressing Super did nothing at all and the numeric keypad
+     * opened the menu instead. */
+    if (event->pressed &&
+        (event->keycode == KEY_LEFTMETA || event->keycode == KEY_RIGHTMETA)) {
         state->launcher_open = !state->launcher_open;
+        state->launcher_selected_index = -1;
         if (state->launcher_open) {
             wm_notification_close_center(state);
             wm_start_menu_clamp_scroll(state);
@@ -210,20 +205,31 @@ void wm_input_handle_keyboard(wm_state_t *state, const ipc_message_t *message)
         return;
     }
     if (state->launcher_open && state->search_active && event->pressed) {
-        if (event->keycode == 0x0Eu) {
+        if (event->keycode == KEY_BACKSPACE) {
             if (wm_start_menu_input_backspace(state)) damage_ui(state);
             return;
         }
-        if (event->keycode == 0x1Cu) {
-            for (uint32_t i = 0; i < state->assets.app_count; i++) {
-                if (str_icontains(state->assets.apps[i].name, state->search_text)) {
-                    process_spawn(state->assets.apps[i].path);
-                    state->launcher_open = false;
-                    state->search_len = 0u;
-                    state->search_text[0] = '\0';
-                    damage_ui(state);
-                    return;
-                }
+        if (event->keycode == KEY_UP || event->keycode == KEY_DOWN) {
+            if (wm_start_menu_move_selection(state,
+                    event->keycode == KEY_DOWN ? 1 : -1)) {
+                damage_start_menu(state);
+            }
+            return;
+        }
+        if (event->keycode == KEY_PAGEUP || event->keycode == KEY_PAGEDOWN) {
+            if (wm_start_menu_scroll(state,
+                    event->keycode == KEY_PAGEDOWN ? 4 : -4)) {
+                damage_start_menu(state);
+            }
+            return;
+        }
+        if (event->keycode == KEY_ENTER) {
+            if (wm_start_menu_launch_selected(state) >= 0) {
+                state->launcher_open = false;
+                state->search_len = 0u;
+                state->search_text[0] = '\0';
+                state->launcher_selected_index = -1;
+                damage_ui(state);
             }
             return;
         }
@@ -460,6 +466,7 @@ static bool handle_taskbar_click(wm_state_t *state)
     if (hit.kind == WM_TASKBAR_HIT_NONE) return false;
     if (hit.kind == WM_TASKBAR_HIT_LAUNCHER) {
         state->launcher_open = !state->launcher_open;
+        state->launcher_selected_index = -1;
         if (state->launcher_open) {
             wm_notification_close_center(state);
             wm_start_menu_clamp_scroll(state);
@@ -622,7 +629,7 @@ static bool handle_launcher_click(wm_state_t *state)
         (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y);
     if (action.kind == WM_LAUNCHER_ACTION_APP &&
         action.app_index < state->assets.app_count) {
-        process_spawn(state->assets.apps[action.app_index].path);
+        (void)wm_assets_launch(&state->assets.apps[action.app_index]);
         state->launcher_open = false;
         state->search_len = 0u;
         state->search_text[0] = '\0';
@@ -648,9 +655,14 @@ static void handle_window_click(wm_state_t *state, uint64_t now_ms)
     wm_window_t *window = wm_scene_hit_test(state,
         (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y, &zone);
     if (!window) {
+        const char *argument = NULL;
         const char *target = wm_desktop_hit_test(state,
-            (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y);
-        if (target) process_spawn(target);
+            (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y,
+            &argument);
+        if (target) {
+            if (argument && argument[0]) (void)process_spawn_with_arg(target, argument);
+            else                         (void)process_spawn(target);
+        }
         return;
     }
     wm_scene_raise(state, window);
@@ -712,6 +724,9 @@ static void handle_mouse_event(wm_state_t *state,
     if (!old_visible || old_x != state->scene.cursor_x ||
         old_y != state->scene.cursor_y) {
         state->compositor.next_frame_ms = 0u;
+        /* Real movement hands the Start menu's highlight back to the
+         * pointer. A report that repeats the same position does not. */
+        state->launcher_selected_index = -1;
     }
     if (sequence != 0u) {
         state->input.last_kernel_pointer_sequence = sequence;

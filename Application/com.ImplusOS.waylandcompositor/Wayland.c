@@ -555,6 +555,11 @@ void wlc_seat_pointer_leave_all(void)
 
 void wlc_seat_pointer_motion(int32_t x, int32_t y)
 {
+    /* A move or resize the client asked for owns the pointer until the
+     * button comes up; the client must not see these, or GTK goes on
+     * hovering and dragging inside a window that is itself moving. */
+    if (wlc_grab_motion(x, y)) return;
+
     int32_t lx = 0, ly = 0;
     int32_t index = wlc_window_at(x, y, &lx, &ly);
 
@@ -579,6 +584,15 @@ void wlc_seat_pointer_motion(int32_t x, int32_t y)
 
 void wlc_seat_pointer_button(uint32_t button, bool pressed)
 {
+    /* Releasing anything ends a grab -- it is the only way out of one, and
+     * the client never learns the grab happened. */
+    if (!pressed && wlc_grab_active()) {
+        wlc_grab_end();
+        wlc_seat_refresh_focus();
+        return;
+    }
+    if (wlc_grab_active()) return;
+
     if (g_pointer_focus < 0 || !g_windows[g_pointer_focus].used) return;
 
     /* A press on a window makes it the keyboard focus, the way any
@@ -1101,20 +1115,81 @@ static void req_xdg_toplevel(wlc_client_t *c, uint32_t id, uint16_t op,
     wlc_obj_t *t = obj(c, id);
     if (!t) return;
 
-    if (op == 0u) {                          /* destroy */
+    /* The window this toplevel drives, or -1. */
+    int32_t index = -1;
+    {
         wlc_obj_t *xs = obj(c, t->r_xdg);
-        if (xs) {
-            wlc_obj_t *s = obj(c, xs->x_surface);
-            if (s && s->s_window >= 0) {
-                wlc_window_free(s->s_window);
-                s->s_window = -1;
-            }
+        wlc_obj_t *s = xs ? obj(c, xs->x_surface) : NULL;
+        if (s) index = s->s_window;
+    }
+
+    switch (op) {
+    case 0:                                  /* destroy */
+        if (index >= 0) {
+            wlc_obj_t *xs = obj(c, t->r_xdg);
+            wlc_obj_t *s = xs ? obj(c, xs->x_surface) : NULL;
+            wlc_window_free(index);
+            if (s) s->s_window = -1;
         }
         obj_destroy(c, id);
+        break;
+
+    case 2: {                                /* set_title(string) */
+        if (index < 0 || n < 4u) break;
+        uint32_t len = r_u32(a);
+        if (len == 0u || len > n - 4u) break;
+        if (len > sizeof(g_windows[index].title))
+            len = (uint32_t)sizeof(g_windows[index].title);
+        memcpy(g_windows[index].title, a + 4, len);
+        g_windows[index].title[sizeof(g_windows[index].title) - 1u] = '\0';
+        break;
     }
-    /* set_title / set_app_id / move / resize / maximize / minimize: this
-     * compositor draws no decorations and does not resize on request, so
-     * they are all no-ops. GTK draws its own decorations. */
+
+    /*
+     * move(seat, serial) and resize(seat, serial, edges). GTK3 draws its
+     * own title bar and borders inside the surface, so this is the only
+     * notice the compositor gets that a drag has started -- and ignoring
+     * it, which is what used to happen here, is exactly why a Wayland
+     * window could not be moved or resized.
+     */
+    case 5:                                  /* move */
+        if (index >= 0) wlc_grab_begin(WLC_GRAB_MOVE, index, 0u);
+        break;
+
+    case 6: {                                /* resize */
+        if (index < 0 || n < 12u) break;
+        wlc_grab_begin(WLC_GRAB_RESIZE, index, r_u32(a + 8));
+        break;
+    }
+
+    default:
+        /* set_parent / set_app_id / show_window_menu / min and max sizes /
+         * maximize / fullscreen / minimize: nothing here acts on them. */
+        break;
+    }
+}
+
+/*
+ * Ask a client to redraw at a new size. The compositor cannot resize a
+ * surface -- only the client can produce a buffer of a different size --
+ * so an interactive resize is a stream of these, and the window changes
+ * shape when the client commits. Called from the resize grab.
+ */
+void wlc_toplevel_request_size(int32_t index, uint32_t w, uint32_t h)
+{
+    if (index < 0 || (uint32_t)index >= WLC_MAX_WINDOWS) return;
+    wlc_window_t *win = &g_windows[index];
+    if (!win->used || !win->mapped || win->popup) return;
+    wlc_client_t *c = win->client;
+    if (!c || c->fd < 0) return;
+
+    wlc_msg_t m;
+    m_begin(&m, win->role, 0u);              /* xdg_toplevel.configure */
+    m_i32(&m, (int32_t)w);
+    m_i32(&m, (int32_t)h);
+    m_array_empty(&m);                       /* states: resizing is implied */
+    m_send(&m, c);
+    send_xdg_configure(c, win->xdg_surface);
 }
 
 static void req_xdg_popup(wlc_client_t *c, uint32_t id, uint16_t op,

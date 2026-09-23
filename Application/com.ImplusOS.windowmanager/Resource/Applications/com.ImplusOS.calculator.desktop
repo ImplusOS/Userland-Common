@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Name[ja]=電卓
+Comment=Arithmetic expressions with a keypad
+Comment[ja]=式を入力して計算する電卓
+Exec=/Userland/com.ImplusOS.calculator/com.ImplusOS.calculator.ELF
+Icon=accessories-calculator
+Categories=Utility;Calculator;

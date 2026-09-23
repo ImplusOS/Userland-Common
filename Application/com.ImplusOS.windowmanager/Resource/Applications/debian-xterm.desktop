@@ -1,0 +1,34 @@
+# Overrides the entry the xterm package installs at
+# /usr/share/applications/debian-xterm.desktop. The window manager resolves
+# desktop entries by file ID with this directory ahead of /usr/share, so the
+# name of this file is what makes it take effect -- the packaged file is left
+# untouched.
+#
+# What the packaged Exec=xterm is missing here:
+#   -fn fixed   draw with the X core bitmap font the image already stages for
+#               Xorg. Without it xterm goes through Xft -> fontconfig.
+#   +sb         no scrollbar: one less Xaw widget on a cold start.
+#   -ut         do not record the session in utmp. There is no utmp here, and
+#               xterm does the recording by fork+exec'ing
+#               /usr/lib/utempter/utempter and waiting for it -- a binary this
+#               image does not ship, so the wait is for a child that only ever
+#               fails to exec (execve -> ENOENT, exit status 1).
+#   -e /bin/sh /bin/imsession
+#               run the shell directly rather than through $SHELL and
+#               getpwuid(), and without the leading '-' of a login shell.
+#               /bin/imsession backgrounds `cat /dev/kmsg` first, so the
+#               kernel log lands in the window.
+#
+# This is the same command line Userland/Application/Terminal uses; the
+# difference is that this entry reaches it through the generic host launcher
+# rather than through a launcher written for it.
+[Desktop Entry]
+Type=Application
+Name=XTerm
+Comment=standard terminal emulator for the X window system
+Comment[ja]=X 標準のターミナルエミュレータ（Debian 版そのまま）
+Exec=/usr/bin/xterm -fn fixed -bg black -fg white +sb -ut -geometry 80x24 -e /bin/sh /bin/imsession
+Icon=xterm
+Categories=Utility;TerminalEmulator;
+X-ImplusOS-Linux=true
+X-ImplusOS-Geometry=800x480

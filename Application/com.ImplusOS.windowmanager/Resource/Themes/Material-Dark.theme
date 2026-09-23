@@ -1,0 +1,23 @@
+; ImplusOS shell theme -- Material Design 3, dark scheme.
+;
+; The whole palette is generated from `seed`: five tonal palettes (primary,
+; secondary, tertiary, neutral, neutral-variant) plus M3's fixed error
+; palette, mapped onto the standard colour roles. Changing the seed retints
+; the entire desktop; nothing else here needs touching.
+;
+; A [Colors] section may override individual roles by their M3 name
+; (primary, surface_container_high, outline_variant, ...) for a hand-tuned
+; scheme. Overrides are applied after the seed, so they win.
+
+[Material]
+seed            = #6750A4
+mode            = dark
+type_scale      = 1.0
+
+[Metrics]
+; M3 "medium" shape on the window frame, level-3 elevation under it, and a
+; navigation bar sized for a row of 34px icon buttons.
+title_height    = 32
+corner_radius   = 12
+shadow_size     = 8
+dock_height     = 40

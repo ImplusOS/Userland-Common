@@ -13,14 +13,23 @@
 
 #define NTP_TIMEOUT_MS   5000u
 
-/* --- taskbar geometry (px) --- */
-#define TB_PAD           5
-#define TB_START_W       46u
+/*
+ * The taskbar is the shell's Material Design 3 navigation bar: a
+ * surface-container plate holding a row of 40px destinations, each of which
+ * is an icon button with an M3 state layer, and each of which shows it is
+ * the active one by wearing a secondary-container "active indicator" pill
+ * rather than by changing colour.
+ */
+
+/* --- navigation bar geometry (px) --- */
+#define TB_PAD           3                 /* plate inset -> 34px buttons */
+#define TB_START_W       42u
 #define TB_TASK_MAX      220u
-#define TB_TRAY_ICON_W   30u
+#define TB_TRAY_ICON_W   34u
 #define TB_NOTIF_W       34u
-#define TB_CLOCK_W       160u
-#define TB_SEP_GAP       6
+#define TB_CLOCK_W       168u
+#define TB_SEP_GAP       8
+#define TB_ICON_SZ       18u
 
 /* Simple day-of-week -- kept only for potential callers; unused in the
  * YYYY/MM/DD HH:MM:SS clock format. */
@@ -138,7 +147,7 @@ wm_rect_t wm_taskbar_rect(const wm_state_t *state)
     if (!state || state->compositor.framebuffer_width == 0u)
         return (wm_rect_t){0, 0, 0, 0};
     uint32_t height = state->theme.dock_height;
-    if (height < 40u) height = 40u;             /* room for the icon row */
+    if (height < 34u) height = 34u;             /* room for the icon row */
     if (height > state->compositor.framebuffer_height)
         height = state->compositor.framebuffer_height;
     return (wm_rect_t){
@@ -215,19 +224,38 @@ static void task_layout(const wm_state_t *state, wm_rect_t dock,
 
 /* ---------------------------------------------------------------- draw */
 
-static void tray_icon(wm_state_t *state, wm_canvas_t *canvas, int32_t x,
-                      wm_rect_t dock, wm_icon_kind_t kind, bool active,
-                      uint32_t tint)
+/* One destination's container: M3's active-indicator pill when it is the
+ * current one, a state layer while it is merely hovered, and nothing at all
+ * otherwise -- a navigation bar's plate shows through the rest of the time. */
+static void draw_destination(wm_state_t *state, wm_canvas_t *canvas,
+                             wm_rect_t box, uint32_t plate, bool active,
+                             bool hovered)
 {
-    wm_rect_t btn = {x, dock.y + TB_PAD, TB_TRAY_ICON_W, dock.h - (uint32_t)TB_PAD * 2u};
+    const m3_scheme_t *m3 = &state->theme.color;
+    if (!active && !hovered) return;
+    uint32_t container = active
+        ? m3->secondary_container
+        : m3_state_layer(plate, m3->on_surface, M3_STATE_HOVER);
+    wm_canvas_fill_rounded(canvas, box,
+        m3_shape_radius(M3_SHAPE_FULL, box.w, box.h), container);
+}
+
+static void tray_icon(wm_state_t *state, wm_canvas_t *canvas, int32_t x,
+                      wm_rect_t dock, uint32_t plate, wm_icon_kind_t kind,
+                      bool active, bool emphasised)
+{
+    const m3_scheme_t *m3 = &state->theme.color;
+    wm_rect_t btn = {x, dock.y + TB_PAD, TB_TRAY_ICON_W,
+                     dock.h - (uint32_t)TB_PAD * 2u};
     bool hover = cursor_in(state, btn);
-    uint32_t bg = active ? state->theme.accent_soft :
-                  hover  ? state->theme.surface_hover : 0u;
-    if (bg) wm_canvas_fill_rounded(canvas, btn, 8u, bg);
-    uint32_t isz = 18u;
+    draw_destination(state, canvas, btn, plate, active, hover);
+    uint32_t tint = active      ? m3->on_secondary_container :
+                    emphasised  ? m3->primary :
+                                  m3->on_surface_variant;
     wm_icon_draw(canvas,
-        (wm_rect_t){btn.x + (int32_t)(btn.w - isz) / 2,
-                    btn.y + (int32_t)(btn.h - isz) / 2, isz, isz},
+        (wm_rect_t){btn.x + (int32_t)(btn.w - TB_ICON_SZ) / 2,
+                    btn.y + (int32_t)(btn.h - TB_ICON_SZ) / 2,
+                    TB_ICON_SZ, TB_ICON_SZ},
         kind, tint);
 }
 
@@ -238,18 +266,20 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
     if (dock.w == 0u) return;
     if (!wm_rect_intersects(dock, canvas->clip)) return;
 
-    uint32_t dock_tint = (state->theme.dock & 0x00FFFFFFu) | (0xE6u << 24u);
-    wm_canvas_fill(canvas, dock, dock_tint);
-    wm_canvas_fill(canvas, (wm_rect_t){0, dock.y, dock.w, 1u}, state->theme.border);
+    const m3_scheme_t *m3 = &state->theme.color;
+    /* M3 puts a navigation bar on surface-container, and marks its edge
+     * with an outline-variant divider rather than a shadow. */
+    uint32_t plate = m3->surface_container;
+    wm_canvas_fill(canvas, dock, plate);
+    wm_canvas_fill(canvas, (wm_rect_t){0, dock.y, dock.w, 1u}, m3->outline_variant);
 
     int32_t pad = TB_PAD;
 
     /* --- Start button: the ImplusOS logo (Resource/Icons/Logo.png) --- */
-    wm_rect_t start = {pad, dock.y + pad, TB_START_W - (uint32_t)pad, dock.h - (uint32_t)pad * 2u};
+    wm_rect_t start = {pad, dock.y + pad, TB_START_W - (uint32_t)pad,
+                       dock.h - (uint32_t)pad * 2u};
     bool start_hover = cursor_in(state, start);
-    uint32_t start_bg = state->launcher_open ? state->theme.accent_soft :
-                        start_hover           ? state->theme.surface_hover : 0u;
-    if (start_bg) wm_canvas_fill_rounded(canvas, start, 8u, start_bg);
+    draw_destination(state, canvas, start, plate, state->launcher_open, start_hover);
     {
         uint32_t isz = 24u;
         wm_rect_t ir = {start.x + (int32_t)(start.w - isz) / 2,
@@ -257,10 +287,12 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
         const wm_icon_image_t *logo = &state->assets.system_icons.logo;
         if (logo->pixels && logo->width && logo->height) {
             wm_canvas_blit_scaled(canvas, ir, logo->pixels,
-                                  logo->width, logo->height, 255u, 4u);
+                                  logo->width, logo->height, 255u,
+                                  M3_SHAPE_EXTRA_SMALL);
         } else {
             wm_icon_draw(canvas, ir, WM_ICON_APPS,
-                state->launcher_open ? state->theme.accent : state->theme.text);
+                state->launcher_open ? m3->on_secondary_container
+                                     : m3->on_surface_variant);
         }
     }
 
@@ -273,96 +305,98 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
         wm_window_t *win = state->scene.id_table[id];
         if (!win || !win->visible || win->is_system || win->close_requested) continue;
         if (drawn >= slots) break;
-        uint32_t inset = btn_w >= 10u ? 3u : 0u;
+        uint32_t inset = btn_w >= 10u ? 2u : 0u;
         wm_rect_t btn = {btn_x + (int32_t)inset, dock.y + pad,
                          btn_w > inset * 2u ? btn_w - inset * 2u : btn_w,
                          dock.h - (uint32_t)pad * 2u};
         bool hover = cursor_in(state, btn);
-        uint32_t bg = win->has_focus ? state->theme.accent_soft :
-                      hover           ? state->theme.surface_hover : 0u;
-        if (bg) wm_canvas_fill_rounded(canvas, btn, 7u, bg);
+        uint32_t pill = m3_shape_radius(M3_SHAPE_FULL, btn.w, btn.h);
+        draw_destination(state, canvas, btn, plate, win->has_focus, hover);
+        /* A minimised window is still running, so it keeps its place on the
+         * bar; M3's way of saying "present but not active" is an outline
+         * rather than a filled container. */
+        if (win->minimized && !win->has_focus)
+            wm_canvas_stroke_rounded(canvas, btn, pill, 1u, m3->outline_variant);
 
+        uint32_t on_container = win->has_focus ? m3->on_secondary_container
+                                               : m3->on_surface_variant;
         if (btn.w >= 30u) {
-            uint32_t isz = 20u;
-            int32_t ix = btn.x + (btn.w >= 120u ? 8 : (int32_t)(btn.w - isz) / 2);
+            uint32_t isz = TB_ICON_SZ;
+            int32_t ix = btn.x + (btn.w >= 120u ? 10 : (int32_t)(btn.w - isz) / 2);
             int32_t iy = btn.y + (int32_t)(btn.h - isz) / 2;
             if (win->has_icon)
                 wm_canvas_blit_scaled(canvas, (wm_rect_t){ix, iy, isz, isz},
-                                      win->icon, 32u, 32u, 255u, 4u);
+                                      win->icon, 32u, 32u, 255u,
+                                      M3_SHAPE_EXTRA_SMALL);
             else
                 wm_icon_draw(canvas, (wm_rect_t){ix, iy, isz, isz},
-                             WM_ICON_MAXIMIZE, state->theme.text_dim);
+                             WM_ICON_DOC, on_container);
         }
         if (btn.w >= 100u) {
             const char *title = win->title[0] ? win->title : "Window";
+            float size = state->theme.type.label_medium;
             wm_font_draw(&state->font, canvas,
-                         btn.x + 34, btn.y + (int32_t)(btn.h - 13u) / 2,
-                         title,
-                         win->has_focus ? state->theme.text : state->theme.text_dim,
-                         state->theme.font_small,
-                         btn.w > 44u ? btn.w - 44u : 0u);
-        }
-        if (win->has_focus || win->minimized) {
-            uint32_t ind_w = win->has_focus ? 22u : 6u;
-            ind_w = wm_min_u32(ind_w, btn.w);
-            wm_canvas_fill_rounded(canvas,
-                (wm_rect_t){btn.x + (int32_t)(btn.w - ind_w) / 2,
-                            btn.y + (int32_t)btn.h - 3, ind_w, 3u},
-                2u, win->has_focus ? state->theme.accent : state->theme.text_dim);
+                         btn.x + 38, btn.y + (int32_t)(btn.h - (uint32_t)size) / 2,
+                         title, on_container, size,
+                         btn.w > 50u ? btn.w - 50u : 0u);
         }
         btn_x += (int32_t)btn_w;
         ++drawn;
     }
 
-    /* --- notification bell --- */
+    /* --- notification bell, with its M3 badge --- */
     {
-        wm_rect_t nbtn = {notif_x(dock), dock.y + pad, TB_NOTIF_W, dock.h - (uint32_t)pad * 2u};
+        wm_rect_t nbtn = {notif_x(dock), dock.y + pad, TB_NOTIF_W,
+                          dock.h - (uint32_t)pad * 2u};
         bool nhover = cursor_in(state, nbtn);
-        uint32_t bg = state->notification_center_open ? state->theme.accent_soft :
-                      nhover ? state->theme.surface_hover : 0u;
-        if (bg) wm_canvas_fill_rounded(canvas, nbtn, 8u, bg);
-        uint32_t isz = 18u;
+        bool nactive = state->notification_center_open;
+        draw_destination(state, canvas, nbtn, plate, nactive, nhover);
         wm_icon_draw(canvas,
-            (wm_rect_t){nbtn.x + (int32_t)(nbtn.w - isz) / 2,
-                        nbtn.y + (int32_t)(nbtn.h - isz) / 2, isz, isz},
-            WM_ICON_NOTIFICATIONS, state->theme.text);
+            (wm_rect_t){nbtn.x + (int32_t)(nbtn.w - TB_ICON_SZ) / 2,
+                        nbtn.y + (int32_t)(nbtn.h - TB_ICON_SZ) / 2,
+                        TB_ICON_SZ, TB_ICON_SZ},
+            WM_ICON_NOTIFICATIONS,
+            nactive ? m3->on_secondary_container : m3->on_surface_variant);
         if (state->notification_unread_count) {
+            /* A small badge: 6px of error, ringed in the plate colour so it
+             * reads against the glyph it sits on. */
+            wm_rect_t badge = {nbtn.x + (int32_t)nbtn.w - 15, nbtn.y + 7, 10u, 10u};
+            wm_canvas_fill_rounded(canvas, badge, 5u, plate);
             wm_canvas_fill_rounded(canvas,
-                (wm_rect_t){nbtn.x + (int32_t)nbtn.w - 12, nbtn.y + 5, 8u, 8u},
-                4u, state->theme.accent | 0xFF000000u);
+                (wm_rect_t){badge.x + 2, badge.y + 2, 6u, 6u}, 3u, m3->error);
         }
     }
 
-    /* --- separator --- */
+    /* --- divider between the task list and the tray --- */
     wm_canvas_fill(canvas,
-        (wm_rect_t){tray_left_x(dock) - TB_SEP_GAP / 2, dock.y + pad + 4,
-                    1u, dock.h - (uint32_t)pad * 2u - 8u},
-        state->theme.border);
+        (wm_rect_t){tray_left_x(dock) - TB_SEP_GAP / 2, dock.y + pad + 8,
+                    1u, dock.h - (uint32_t)pad * 2u - 16u},
+        m3->outline_variant);
 
     /* --- tray: IME, Wi-Fi, Audio (left -> right toward the clock) --- */
     {
         int32_t tx = tray_left_x(dock);
         bool wifi_connected = state->wifi_panel.status.state == WIFI_STATE_ASSOCIATED;
-        tray_icon(state, canvas, tx, dock, WM_ICON_IME, false, state->theme.text_dim);
-        tray_icon(state, canvas, tx + (int32_t)TB_TRAY_ICON_W, dock,
+        tray_icon(state, canvas, tx, dock, plate, WM_ICON_IME, false, false);
+        tray_icon(state, canvas, tx + (int32_t)TB_TRAY_ICON_W, dock, plate,
                   wifi_connected ? WM_ICON_WIFI : WM_ICON_WIFI_OFF,
-                  state->wifi_panel.open,
-                  wifi_connected ? state->theme.accent : state->theme.text_dim);
-        tray_icon(state, canvas, tx + 2 * (int32_t)TB_TRAY_ICON_W, dock,
-                  WM_ICON_VOLUME, false, state->theme.text_dim);
+                  state->wifi_panel.open, wifi_connected);
+        tray_icon(state, canvas, tx + 2 * (int32_t)TB_TRAY_ICON_W, dock, plate,
+                  WM_ICON_VOLUME, false, false);
     }
 
     /* --- clock: YYYY/MM/DD HH:MM:SS, far right --- */
     if (state->clock_text[0]) {
         wm_rect_t cr = wm_taskbar_clock_rect(state);
-        uint32_t tw = wm_font_measure(&state->font, state->clock_text,
-                                      state->theme.font_small);
+        wm_rect_t hit = {cr.x, dock.y + pad, cr.w, dock.h - (uint32_t)pad * 2u};
+        draw_destination(state, canvas, hit, plate, false, cursor_in(state, hit));
+        float size = state->theme.type.label_medium;
+        uint32_t tw = wm_font_measure(&state->font, state->clock_text, size);
         int32_t tx = cr.x + ((int32_t)cr.w - (int32_t)tw) / 2;
         if (tx < cr.x + 2) tx = cr.x + 2;
-        int32_t ty = dock.y + (int32_t)dock.h / 2 - 7;
+        int32_t ty = dock.y + ((int32_t)dock.h - (int32_t)size) / 2 - 1;
         wm_font_draw(&state->font, canvas, tx, ty,
-                     state->clock_text, state->theme.text,
-                     state->theme.font_small, cr.w);
+                     state->clock_text, m3->on_surface, size, cr.w);
     }
 }
 

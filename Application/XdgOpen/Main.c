@@ -33,16 +33,35 @@ static const char *FILE_MANAGER =
 static const char *EDITOR =
     "/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF";
 
+/* Kept in step with the file manager's TEXT_EXT: if the two lists disagree,
+ * "Open" in the editor's place and double-clicking the same file disagree
+ * too. Suffix match, case-insensitive, for the same reason the file manager
+ * does it -- README.TXT is text. */
+static const char *const TEXT_EXT[] = {
+    ".txt", ".md", ".c", ".h", ".cpp", ".cc", ".hpp", ".log", ".cfg", ".ini",
+    ".sh",  ".json", ".xml", ".list", ".theme", ".conf", ".py", ".csv",
+    ".js",  ".html", ".css", ".yml", ".yaml", ".desktop", ".patch",
+};
+
+static bool ends_with_ci(const char *text, const char *suffix)
+{
+    size_t n = strlen(text), m = strlen(suffix);
+    if (n < m) return false;
+    text += n - m;
+    for (size_t i = 0; i < m; ++i) {
+        char a = text[i], b = suffix[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        if (a != b) return false;
+    }
+    return true;
+}
+
 static bool is_text_name(const char *n)
 {
-    const char *dot = strrchr(n, '.');
-    if (!dot) return false;
-    static const char *ext[] = { ".txt", ".md", ".c", ".h", ".cpp", ".log",
-                                 ".cfg", ".ini", ".sh", ".json", ".xml",
-                                 ".list", ".conf", ".py", ".csv" };
-    for (unsigned i = 0; i < sizeof(ext) / sizeof(ext[0]); ++i) {
-        if (strcmp(dot, ext[i]) == 0) return true;
-    }
+    if (!strchr(n, '.')) return false;
+    for (unsigned i = 0; i < sizeof(TEXT_EXT) / sizeof(TEXT_EXT[0]); ++i)
+        if (ends_with_ci(n, TEXT_EXT[i])) return true;
     return false;
 }
 

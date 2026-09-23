@@ -1,4 +1,4 @@
-.PHONY: all clean copy_resources
+.PHONY: all clean copy_resources test
 
 APP_NAME := $(notdir $(patsubst %/,%,$(CURDIR)))
 SRC_DIR  := .
@@ -49,6 +49,26 @@ $(BUILD_DIR)/%.o: %.cpp
 $(ELF): $(OBJS)
 	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) $^ $(LDLIBS) -o $@
+
+# Host-compiled unit tests. They build against the host libc with the shell's
+# file and display syscalls stubbed out, so they run here rather than needing
+# a QEMU boot; `make test` is the fast check before one.
+TEST_DIR   := $(BUILD_DIR)/Tests
+TEST_CFLAGS := -std=c11 -D_GNU_SOURCE -I. -I../../API/Source -I../../Source \
+               -Wall -Wextra -g
+
+test:
+	@mkdir -p $(TEST_DIR)
+	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/WM_CoreTest \
+		Tests/WM_CoreTest.c Compositor/WM_Damage.c Compositor/WM_Raster.c \
+		Core/WM_Display.c Core/WM_EventQueue.c ../../API/Source/Material.c
+	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/WM_DesktopEntryTest \
+		Tests/WM_DesktopEntryTest.c Linux/WM_DesktopEntry.c
+	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/MaterialTest \
+		Tests/MaterialTest.c ../../API/Source/Material.c
+	@$(TEST_DIR)/WM_CoreTest
+	@$(TEST_DIR)/WM_DesktopEntryTest
+	@$(TEST_DIR)/MaterialTest
 
 clean:
 	rm -rf $(BUILD_DIR)

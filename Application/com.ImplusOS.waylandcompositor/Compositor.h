@@ -97,6 +97,7 @@ typedef struct {
     uint32_t      parent_surface; /* popups only */
     int32_t       x, y;           /* top-left in output coordinates */
     uint32_t      w, h;           /* from the committed buffer */
+    char          title[96];      /* xdg_toplevel.set_title */
 
     /* Committed pixels, copied out of the client's wl_shm buffer at commit
      * so the buffer can be released straight away and the scene can be
@@ -104,6 +105,28 @@ typedef struct {
     uint32_t     *pixels;
     uint32_t      pix_cap;        /* pixels allocated, in uint32_t units */
 } wlc_window_t;
+
+/* ---- interactive grabs ----------------------------------------------- */
+
+/*
+ * GTK3 draws its own title bar inside the surface, so dragging a window is
+ * not something the compositor sees as a drag: the client sends
+ * xdg_toplevel.move and expects the compositor to take over the pointer
+ * until the button comes up. Resizing works the same way through
+ * xdg_toplevel.resize. Without these a client-side-decorated window is
+ * simply immovable, which is what it was here.
+ */
+typedef enum {
+    WLC_GRAB_NONE = 0,
+    WLC_GRAB_MOVE,
+    WLC_GRAB_RESIZE
+} wlc_grab_kind_t;
+
+/* xdg_toplevel.resize edge bits, from xdg-shell. */
+#define WLC_EDGE_TOP     1u
+#define WLC_EDGE_BOTTOM  2u
+#define WLC_EDGE_LEFT    4u
+#define WLC_EDGE_RIGHT   8u
 
 /* ---- the output ------------------------------------------------------ */
 typedef struct {
@@ -134,6 +157,17 @@ void    wlc_window_free(int32_t index);
 void    wlc_window_raise(int32_t index);
 void    wlc_window_place(int32_t index);
 int32_t wlc_window_at(int32_t x, int32_t y, int32_t *out_local_x, int32_t *out_local_y);
+
+/* Start an interactive move or resize of `index`, anchored at the pointer's
+ * current position. `edges` is the xdg-shell edge mask, and is ignored for a
+ * move. */
+void    wlc_grab_begin(wlc_grab_kind_t kind, int32_t index, uint32_t edges);
+/* End whatever grab is running. Called when the button comes up. */
+void    wlc_grab_end(void);
+bool    wlc_grab_active(void);
+/* Apply a pointer position to the running grab. Returns true when the grab
+ * consumed it, in which case the client must not also see it. */
+bool    wlc_grab_motion(int32_t x, int32_t y);
 int32_t wlc_window_focus_candidate(void);
 void    wlc_damage_all(void);
 

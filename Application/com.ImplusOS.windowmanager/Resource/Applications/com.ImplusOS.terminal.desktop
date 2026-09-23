@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Name[ja]=ターミナル
+Comment=xterm on the Linux ABI, with busybox ash and the kernel log
+Comment[ja]=Linux ABI 上の xterm。busybox ash とカーネルログが出る
+Exec=/Userland/Terminal/Terminal.ELF
+Icon=utilities-terminal
+Categories=Utility;TerminalEmulator;
+X-ImplusOS-Linux=true

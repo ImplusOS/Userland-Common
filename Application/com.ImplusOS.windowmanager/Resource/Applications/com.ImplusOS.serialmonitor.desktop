@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Serial Monitor
+Name[ja]=シリアルモニタ
+Comment=Watch the kernel's COM1 debug channel
+Comment[ja]=カーネルの COM1 デバッグ出力を見る
+Exec=/Userland/com.ImplusOS.serialmonitor/com.ImplusOS.serialmonitor.ELF
+Icon=utilities-system-monitor
+Categories=System;

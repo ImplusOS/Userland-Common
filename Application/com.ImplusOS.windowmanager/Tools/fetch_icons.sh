@@ -26,6 +26,7 @@ settings power_settings_new restart_alt folder folder_open description person
 close remove crop_square filter_none expand_less terminal edit
 arrow_back arrow_forward arrow_upward home refresh note_add file_open save
 delete content_copy content_cut content_paste check storage
+info warning error memory
 "
 
 for name in $GLYPHS; do

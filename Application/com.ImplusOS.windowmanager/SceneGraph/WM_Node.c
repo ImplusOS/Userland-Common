@@ -1,5 +1,8 @@
 #include "WM_Node.h"
 
+#include "../Core/WM_Display.h"
+#include "../Decoration/WM_Decoration.h"
+
 #include "../Animation/WM_Animation.h"
 #include "../Compositor/WM_Damage.h"
 #include "../../../../Userland/API/Source/Memory.h"
@@ -199,6 +202,45 @@ static bool window_should_animate_show(wm_rect_t frame)
     return pixels < WM_LARGE_WINDOW_ANIMATION_PIXELS;
 }
 
+/*
+ * Put a new window somewhere it is entirely usable.
+ *
+ * A client asks for a size and, almost always, the default position every
+ * one of them asks for -- so without this they all land in the same place,
+ * and any window taller than the work area runs under the taskbar with its
+ * status bar and last row of controls off the screen. The frame is shrunk
+ * to what the work area can hold (title bar included, since that is part of
+ * what is on screen) and then nudged inside it, cascading so the second
+ * window does not land exactly on the first.
+ */
+static void fit_into_work_area(wm_state_t *state, wm_rect_t *frame)
+{
+    static uint32_t cascade;
+
+    wm_rect_t area = wm_display_work_area_for_rect(state, *frame);
+    if (area.w == 0u || area.h == 0u) return;
+
+    uint32_t chrome = state->theme.title_height;
+    uint32_t max_w = area.w > 16u ? area.w - 16u : area.w;
+    uint32_t max_h = area.h > chrome + 16u ? area.h - chrome - 16u : area.h;
+    if (frame->w > max_w) frame->w = max_w;
+    if (frame->h > max_h) frame->h = max_h;
+
+    int32_t step = (int32_t)((cascade % 5u) * 28u);
+    ++cascade;
+    frame->x += step;
+    frame->y += step;
+
+    int32_t right = area.x + (int32_t)area.w;
+    int32_t bottom = area.y + (int32_t)area.h;
+    if (frame->x + (int32_t)frame->w > right)
+        frame->x = right - (int32_t)frame->w;
+    if (frame->y + (int32_t)frame->h + (int32_t)chrome > bottom)
+        frame->y = bottom - (int32_t)frame->h - (int32_t)chrome;
+    if (frame->x < area.x) frame->x = area.x;
+    if (frame->y < area.y + (int32_t)chrome) frame->y = area.y + (int32_t)chrome;
+}
+
 int32_t wm_scene_create_window(wm_state_t *state, int32_t owner_pid,
                                wm_rect_t frame, uint32_t background,
                                const char *title)
@@ -209,6 +251,7 @@ int32_t wm_scene_create_window(wm_state_t *state, int32_t owner_pid,
     uint32_t max_height = wm_max_u32(state->compositor.framebuffer_height * 2u, 4096u);
     if (frame.w > max_width) frame.w = max_width;
     if (frame.h > max_height) frame.h = max_height;
+    fit_into_work_area(state, &frame);
     uint32_t id = 0u;
     for (uint32_t candidate = 1u; candidate <= WM_MAX_WINDOWS; ++candidate) {
         if (!state->scene.id_table[candidate]) {
@@ -242,7 +285,7 @@ int32_t wm_scene_create_window(wm_state_t *state, int32_t owner_pid,
     layer_push_top(&state->scene, window, WM_LAYER_NORMAL);
     wm_scene_focus(state, window);
     if (animate_show) {
-        wm_animation_start(state, window, WM_TRANSITION_SHOW, 220u);
+        wm_animation_start(state, window, WM_TRANSITION_SHOW, M3_DURATION_MEDIUM_4);
     }
     wm_window_mark_frame_damage(state, window);
     return (int32_t)id;
@@ -306,7 +349,7 @@ void wm_scene_destroy_window(wm_state_t *state, uint32_t id)
     if (!window || window->close_requested) return;
     window->close_requested = true;
     if (state->scene.focused_id == id) wm_scene_focus_next(state, id);
-    wm_animation_start(state, window, WM_TRANSITION_CLOSE, 170u);
+    wm_animation_start(state, window, WM_TRANSITION_CLOSE, M3_DURATION_SHORT_4);
 }
 
 bool wm_scene_set_frame(wm_state_t *state, wm_window_t *window, wm_rect_t frame)
@@ -318,14 +361,36 @@ bool wm_scene_set_frame(wm_state_t *state, wm_window_t *window, wm_rect_t frame)
     uint32_t max_height = wm_max_u32(state->compositor.framebuffer_height * 2u, 4096u);
     if (frame.w > max_width) frame.w = max_width;
     if (frame.h > max_height) frame.h = max_height;
+    /* Deliberately not fitted to the work area: this is the explicit
+     * move/resize path, and a window the user has dragged half off the edge
+     * is where the user put it. */
+
+    bool size_changed = frame.w != window->frame.w || frame.h != window->frame.h;
 
     wm_window_mark_frame_damage(state, window);
-    if ((frame.w != window->frame.w || frame.h != window->frame.h) &&
-        !allocate_surface(window, frame.w, frame.h, true)) return false;
+    if (size_changed && !allocate_surface(window, frame.w, frame.h, true))
+        return false;
     window->frame = frame;
     wm_region_reset(&window->damage);
     wm_region_add_full(&window->damage);
     wm_window_mark_frame_damage(state, window);
+    /* allocate_surface() replaced the shared-memory object the owner mapped:
+     * its handle is closed and the surface the compositor now reads from is a
+     * different one. A client that is not told keeps drawing into the buffer
+     * it mapped at creation time and its window stops updating for good, so
+     * this is the one part of a resize the owner must hear about. */
+    if (size_changed && window->owner_pid > 0) {
+        wm_window_resized_t resized = {
+            .header = {
+                .type = WM_WINDOW_RESIZED,
+                .request_id = 0u,
+                .window_id = window->id,
+            },
+            .width = frame.w,
+            .height = frame.h,
+        };
+        ipc_send_message(window->owner_pid, &resized, sizeof(resized));
+    }
     return true;
 }
 
@@ -335,21 +400,21 @@ void wm_scene_show(wm_state_t *state, wm_window_t *window)
     window->visible = true;
     window->minimized = false;
     window->close_requested = false;
-    wm_animation_start(state, window, WM_TRANSITION_SHOW, 200u);
+    wm_animation_start(state, window, WM_TRANSITION_SHOW, M3_DURATION_MEDIUM_2);
 }
 
 void wm_scene_hide(wm_state_t *state, wm_window_t *window)
 {
     if (!state || !window || !window->visible) return;
     if (state->scene.focused_id == window->id) wm_scene_focus_next(state, window->id);
-    wm_animation_start(state, window, WM_TRANSITION_HIDE, 150u);
+    wm_animation_start(state, window, WM_TRANSITION_HIDE, M3_DURATION_SHORT_4);
 }
 
 void wm_scene_minimize(wm_state_t *state, wm_window_t *window)
 {
     if (!state || !window || window->minimized) return;
     if (state->scene.focused_id == window->id) wm_scene_focus_next(state, window->id);
-    wm_animation_start(state, window, WM_TRANSITION_MINIMIZE, 180u);
+    wm_animation_start(state, window, WM_TRANSITION_MINIMIZE, M3_DURATION_SHORT_4);
 }
 
 void wm_scene_restore(wm_state_t *state, wm_window_t *window)
@@ -359,7 +424,7 @@ void wm_scene_restore(wm_state_t *state, wm_window_t *window)
     window->minimized = false;
     wm_scene_raise(state, window);
     wm_scene_focus(state, window);
-    wm_animation_start(state, window, WM_TRANSITION_RESTORE, 200u);
+    wm_animation_start(state, window, WM_TRANSITION_RESTORE, M3_DURATION_MEDIUM_2);
 }
 
 void wm_scene_raise(wm_state_t *state, wm_window_t *window)
@@ -384,7 +449,7 @@ void wm_scene_lower(wm_state_t *state, wm_window_t *window)
 
 void wm_scene_focus(wm_state_t *state, wm_window_t *window)
 {
-    if (!state || !window || window->is_system || window->close_requested) return;
+    if (!state || !window || window->close_requested) return;
     wm_window_t *old = wm_scene_find(&state->scene, state->scene.focused_id);
     if (old == window) return;
     if (old) {
@@ -409,7 +474,7 @@ void wm_scene_focus_next(wm_state_t *state, uint32_t excluded_id)
         for (wm_window_t *window = state->scene.layer_top[layer];
              window; window = window->z_next) {
             if (window->id != excluded_id && window->visible && !window->minimized &&
-                !window->close_requested && !window->is_system) {
+                !window->close_requested) {
                 wm_scene_focus(state, window);
                 return;
             }
@@ -417,15 +482,25 @@ void wm_scene_focus_next(wm_state_t *state, uint32_t excluded_id)
     }
 }
 
+/*
+ * "System" means chrome: no decoration and no taskbar entry, for a surface
+ * that is not an application window -- the Wayland session's output is the
+ * one thing in the tree that is.
+ *
+ * It does NOT mean unreachable. This used to push such a window onto the
+ * panel layer and refuse it focus, which pinned it above every application
+ * and, because the compositor only routes input to the focused window, cut
+ * it off from the keyboard and mouse entirely: a hosted Wayland session
+ * came up visible and dead. A system window stacks and focuses like any
+ * other; it just is not drawn a frame or listed on the bar.
+ */
 void wm_scene_set_system(wm_state_t *state, wm_window_t *window, bool system)
 {
     if (!state || !window || window->is_system == system) return;
     wm_window_mark_frame_damage(state, window);
     layer_remove(&state->scene, window);
     window->is_system = system;
-    layer_push_top(&state->scene, window, system ? WM_LAYER_PANEL : WM_LAYER_NORMAL);
-    if (system && state->scene.focused_id == window->id)
-        wm_scene_focus_next(state, window->id);
+    layer_push_top(&state->scene, window, WM_LAYER_NORMAL);
     wm_window_mark_frame_damage(state, window);
 }
 
@@ -459,9 +534,26 @@ static wm_hit_zone_t window_zone(const wm_state_t *state,
     if (top_edge) return WM_HIT_RESIZE_TOP;
     if (bottom_edge) return WM_HIT_RESIZE_BOTTOM;
     if (local_y < (int32_t)state->theme.title_height) {
-        if (right <= (int32_t)WM_TITLE_BUTTON_WIDTH) return WM_HIT_CLOSE;
-        if (right <= (int32_t)(WM_TITLE_BUTTON_WIDTH * 2u)) return WM_HIT_MAXIMIZE;
-        if (right <= (int32_t)(WM_TITLE_BUTTON_WIDTH * 3u)) return WM_HIT_MINIMIZE;
+        /* The controls are wherever the decoration paints them -- both
+         * sides ask wm_decoration_title_button_rect(), so a button cannot
+         * end up drawn in one place and clicked in another. */
+        wm_rect_t bar = {window->frame.x, window->frame.y, window->frame.w,
+                         state->theme.title_height};
+        if (wm_decoration_has_title_buttons(bar.w)) {
+            static const struct {
+                wm_title_button_t button;
+                wm_hit_zone_t zone;
+            } controls[] = {
+                {WM_TITLE_BUTTON_CLOSE,    WM_HIT_CLOSE},
+                {WM_TITLE_BUTTON_MAXIMIZE, WM_HIT_MAXIMIZE},
+                {WM_TITLE_BUTTON_MINIMIZE, WM_HIT_MINIMIZE},
+            };
+            for (uint32_t i = 0u; i < sizeof(controls) / sizeof(controls[0]); ++i) {
+                wm_rect_t box = wm_decoration_title_button_rect(state, bar,
+                                                                controls[i].button);
+                if (point_in_rect(x, y, box)) return controls[i].zone;
+            }
+        }
         return WM_HIT_TITLE;
     }
     return WM_HIT_CONTENT;

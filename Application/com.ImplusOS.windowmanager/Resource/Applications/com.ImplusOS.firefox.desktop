@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=FireFox
+Comment=Upstream Linux FireFox, hosted on Xorg
+Comment[ja]=無改変の Linux 版 FireFox を Xorg 上で動かす
+Exec=/Userland/FireFox/FireFox.ELF
+Icon=firefox
+Categories=Network;WebBrowser;
+X-ImplusOS-Linux=true

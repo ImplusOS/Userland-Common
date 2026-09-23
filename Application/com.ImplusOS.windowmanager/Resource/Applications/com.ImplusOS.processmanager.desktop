@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Process Manager
+Name[ja]=プロセスマネージャー
+Comment=Inspect running processes and end them
+Comment[ja]=実行中のプロセスを確認して終了する
+Exec=/Userland/com.ImplusOS.processmanager/com.ImplusOS.processmanager.ELF
+Icon=utilities-system-monitor
+Categories=System;Monitor;

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Name[ja]=設定
+Comment=Desktop theme and system information
+Comment[ja]=デスクトップの配色とシステム情報
+Exec=/Userland/com.ImplusOS.settings/com.ImplusOS.settings.ELF
+Icon=preferences-system
+Categories=Settings;System;

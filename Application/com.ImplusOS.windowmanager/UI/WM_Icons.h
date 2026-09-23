@@ -31,11 +31,28 @@ typedef enum {
     WM_ICON_CHEVRON_UP,
     WM_ICON_TERMINAL,
     WM_ICON_EDIT,
+    WM_ICON_ARROW_BACK,
+    WM_ICON_MEMORY,          /* the process manager */
+    WM_ICON_INFO,            /* the three dialog severities */
+    WM_ICON_WARNING,
+    WM_ICON_ERROR,
 } wm_icon_kind_t;
 
 /* Draw `kind` centred in `box`, tinted `argb` (alpha respected). */
 void wm_icon_draw(wm_canvas_t *canvas, wm_rect_t box,
                   wm_icon_kind_t kind, uint32_t argb);
+
+/* Map a freedesktop.org icon name to one of the glyphs above, or return -1.
+ *
+ * A desktop entry's Icon= is normally a themed PNG, and that is what gets
+ * drawn when the image has one. Almost none of them do: the staged Debian
+ * runtime ships app icons for three programs, and ImplusOS's own
+ * applications have never had icon files at all. Recognising the standard
+ * names (utilities-terminal, system-file-manager, ...) means an entry can
+ * ask for the shell's own drawn iconography instead and get something
+ * better than a two-letter badge, while still picking up a real icon the
+ * day one is installed under that name. */
+int32_t wm_icon_kind_from_name(const char *name);
 
 /* Material-style pointer / resize cursors, top-left anchored at (x,y). */
 void wm_icon_draw_cursor(wm_canvas_t *canvas, int32_t x, int32_t y,

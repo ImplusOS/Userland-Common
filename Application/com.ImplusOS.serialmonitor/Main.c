@@ -239,6 +239,7 @@ static void do_save(imui_app_t *a, imui_widget_t *w, void *u)
     if (fd < 0) { imui_set_text(g_app, w_status, "save failed: " SAVE_PATH); return; }
 
     uint32_t written = 0u;
+    uint64_t total = 0u;
     for (uint32_t i = 0; i < g_ring.count; ++i) {
         /* Formatted into the heap snapshot buffer -- file_write() copies out
          * of it and the kernel checks it the same way a read destination is
@@ -252,14 +253,23 @@ static void do_save(imui_app_t *a, imui_widget_t *w, void *u)
             off += (uint32_t)k;
         }
         if (off < len) break;
+        total += off;
         written++;
     }
+    /* Saving over a longer capture from a previous run used to leave that
+     * run's tail past the end of this one. Trimming to what was just written
+     * closes the file at the last line actually saved. */
+    int32_t trimmed = file_truncate(fd, total);
     file_close(fd);
 
     /* The next poll re-reads the tail into g_snap; g_prev still holds the
      * previous window, so nothing is lost by having borrowed the buffer. */
     char s[96];
-    snprintf(s, sizeof(s), "saved %u lines to " SAVE_PATH, (unsigned)written);
+    if (trimmed < 0)
+        snprintf(s, sizeof(s), "saved %u lines to " SAVE_PATH " (no truncate)",
+                 (unsigned)written);
+    else
+        snprintf(s, sizeof(s), "saved %u lines to " SAVE_PATH, (unsigned)written);
     imui_set_text(g_app, w_status, s);
     imui_request_paint(g_app);
 }
@@ -308,21 +318,23 @@ int _start(void)
     root->kind = IMUI_COL; root->pad = 0; root->gap = 0;
 
     imui_widget_t *tb = imui_container(root, IMUI_ROW, 8, 6);
-    tb->grow = 0; tb->min_h = 46; tb->fill_bg = true;
+    tb->grow = 0; tb->min_h = 72; tb->fill_bg = true;
+    imui_set_variant(tb, IMUI_FILLED);            /* M3 toolbar bar */
     w_pause  = imui_button(tb, "Pause", IMUI_ICON_NONE, do_pause, NULL);
     imui_button(tb, "Clear", IMUI_ICON_TRASH, do_clear, NULL);
-    imui_button(tb, "Save", IMUI_ICON_SAVE, do_save, NULL);
+    imui_set_variant(imui_button(tb, "Save", IMUI_ICON_SAVE, do_save, NULL),
+                     IMUI_TONAL);
     w_source = imui_button(tb, "View: kernel", IMUI_ICON_REFRESH, do_source, NULL);
     w_source->min_w = 140;
-    imui_label(tb, "Filter");
+    imui_set_type_role(imui_label(tb, "Filter"), IMUI_LABEL_SMALL);
     w_filter = imui_textbox(tb, "");
     w_filter->grow = 1;
     w_filter->on_change = on_filter;
     w_filter->on_submit = on_filter;
 
     imui_widget_t *bar = imui_container(root, IMUI_ROW, 8, 6);
-    bar->grow = 0; bar->min_h = 26;
-    w_status = imui_label(bar, "");
+    bar->grow = 0; bar->min_h = 28;
+    w_status = imui_set_type_role(imui_label(bar, ""), IMUI_LABEL_SMALL);
     w_status->grow = 1;
 
     imui_widget_t *body = imui_container(root, IMUI_COL, 8, 8);

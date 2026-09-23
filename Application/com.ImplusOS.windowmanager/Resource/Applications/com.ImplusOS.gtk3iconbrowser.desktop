@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GTK3 Icon Browser
+Comment=Browse the installed icon theme
+Comment[ja]=インストール済みアイコンテーマを見る
+Exec=/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF /usr/bin/gtk3-icon-browser
+Icon=applications-development
+Categories=Development;GTK;
+X-ImplusOS-Linux=true

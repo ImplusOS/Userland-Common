@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Wayland Compositor
+Name[ja]=Wayland コンポジタ
+Comment=Start the Wayland display server on its own
+Comment[ja]=Wayland ディスプレイサーバを単体で起動する
+Exec=/Userland/com.ImplusOS.waylandcompositor/com.ImplusOS.waylandcompositor.ELF
+Icon=applications-system
+Categories=System;

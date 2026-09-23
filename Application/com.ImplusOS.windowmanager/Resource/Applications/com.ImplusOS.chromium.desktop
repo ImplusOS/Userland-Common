@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Chromium
+Comment=Upstream Linux Chromium, hosted on Xorg
+Comment[ja]=無改変の Linux 版 Chromium を Xorg 上で動かす
+Exec=/Userland/Chromium/Chromium.ELF
+Icon=chromium
+Categories=Network;WebBrowser;
+X-ImplusOS-Linux=true

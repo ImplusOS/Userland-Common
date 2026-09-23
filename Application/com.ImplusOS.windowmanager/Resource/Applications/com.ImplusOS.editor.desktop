@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Editor
+Name[ja]=テキストエディタ
+Comment=Edit text files
+Comment[ja]=テキストファイルを編集する
+Exec=/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF
+Icon=accessories-text-editor
+Categories=Utility;TextEditor;

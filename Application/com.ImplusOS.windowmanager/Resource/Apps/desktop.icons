@@ -1,0 +1,19 @@
+# Default desktop icons.
+#
+# Format: Label|/path/to/App.ELF|launch argument
+#   - the label may be left empty, in which case the name of the matching
+#     Start-menu entry is drawn -- which is the localized one, so the desktop
+#     follows the application list instead of repeating it;
+#   - the launch argument is optional, and is how a Linux program gets onto
+#     the desktop: give the host launcher's ELF and the "Title|command" line
+#     it takes (the same pair the Start menu uses).
+#
+# The user's own arrangement lives in /var/System/desktop.icons and replaces
+# this file wholesale when it exists.
+
+|/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF
+|/Userland/Terminal/Terminal.ELF
+|/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF
+|/Userland/Chromium/Chromium.ELF
+|/Userland/FireFox/FireFox.ELF
+|/Userland/com.ImplusOS.settings/com.ImplusOS.settings.ELF

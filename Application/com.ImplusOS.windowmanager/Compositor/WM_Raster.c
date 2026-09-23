@@ -95,21 +95,44 @@ void wm_canvas_fill(wm_canvas_t *canvas, wm_rect_t rect, uint32_t color)
     }
 }
 
+/* Per-corner radii, in the order M3 writes a shape: top-left, top-right,
+ * bottom-right, bottom-left. A component with three round corners and one
+ * square one -- a title bar, a menu anchored to an edge -- is an M3 shape
+ * like any other, and used to have to be faked by painting a rounded rect
+ * and then a square patch over part of it. */
+typedef struct {
+    uint32_t top_left;
+    uint32_t top_right;
+    uint32_t bottom_right;
+    uint32_t bottom_left;
+} wm_corners_t;
+
+static uint32_t corner_radius_at(const wm_corners_t *corners,
+                                 bool left, bool top)
+{
+    if (top) return left ? corners->top_left : corners->top_right;
+    return left ? corners->bottom_left : corners->bottom_right;
+}
+
 static uint8_t rounded_pixel_coverage(uint32_t x, uint32_t y,
                                       uint32_t width, uint32_t height,
-                                      uint32_t radius)
+                                      const wm_corners_t *corners)
 {
-    if (radius == 0u || width == 0u || height == 0u) return 255u;
-    radius = wm_min_u32(radius, wm_min_u32(width / 2u, height / 2u));
+    if (width == 0u || height == 0u) return 255u;
+    uint32_t limit = wm_min_u32(width / 2u, height / 2u);
+
+    bool left = x < width / 2u;
+    bool top = y < height / 2u;
+    uint32_t radius = wm_min_u32(corner_radius_at(corners, left, top), limit);
     if (radius == 0u) return 255u;
 
-    bool corner_x = x < radius || x >= width - radius;
-    bool corner_y = y < radius || y >= height - radius;
+    bool corner_x = left ? x < radius : x >= width - radius;
+    bool corner_y = top ? y < radius : y >= height - radius;
     if (!corner_x || !corner_y) return 255u;
 
-    int32_t center_x16 = x < radius ? (int32_t)radius * 16 :
+    int32_t center_x16 = left ? (int32_t)radius * 16 :
         (int32_t)(width - radius) * 16;
-    int32_t center_y16 = y < radius ? (int32_t)radius * 16 :
+    int32_t center_y16 = top ? (int32_t)radius * 16 :
         (int32_t)(height - radius) * 16;
     int32_t radius16 = (int32_t)radius * 16;
     int64_t radius_squared = (int64_t)radius16 * (int64_t)radius16;
@@ -139,12 +162,17 @@ static void wm_canvas_put_coverage(wm_canvas_t *canvas, int32_t x, int32_t y,
     wm_canvas_put(canvas, x, y, color);
 }
 
-void wm_canvas_fill_rounded(wm_canvas_t *canvas, wm_rect_t rect,
-                            uint32_t radius, uint32_t color)
+static void fill_shape(wm_canvas_t *canvas, wm_rect_t rect,
+                       const wm_corners_t *corners, uint32_t color)
 {
     if (!canvas || !canvas->pixels || rect.w == 0u || rect.h == 0u) return;
-    radius = wm_min_u32(radius, wm_min_u32(rect.w / 2u, rect.h / 2u));
-    if (radius == 0u) {
+    uint32_t limit = wm_min_u32(rect.w / 2u, rect.h / 2u);
+    uint32_t widest = corners->top_left;
+    if (corners->top_right > widest) widest = corners->top_right;
+    if (corners->bottom_right > widest) widest = corners->bottom_right;
+    if (corners->bottom_left > widest) widest = corners->bottom_left;
+    widest = wm_min_u32(widest, limit);
+    if (widest == 0u) {
         wm_canvas_fill(canvas, rect, color);
         return;
     }
@@ -154,7 +182,7 @@ void wm_canvas_fill_rounded(wm_canvas_t *canvas, wm_rect_t rect,
     for (uint32_t row = 0u; row < visible.h; ++row) {
         int32_t py = visible.y + (int32_t)row;
         uint32_t local_y = (uint32_t)(py - rect.y);
-        if (local_y >= radius && local_y < rect.h - radius) {
+        if (local_y >= widest && local_y < rect.h - widest) {
             wm_canvas_fill(canvas, (wm_rect_t){visible.x, py, visible.w, 1u}, color);
             continue;
         }
@@ -162,9 +190,100 @@ void wm_canvas_fill_rounded(wm_canvas_t *canvas, wm_rect_t rect,
             int32_t px = visible.x + (int32_t)col;
             uint32_t local_x = (uint32_t)(px - rect.x);
             uint8_t coverage = rounded_pixel_coverage(local_x, local_y,
-                                                      rect.w, rect.h, radius);
+                                                      rect.w, rect.h, corners);
             wm_canvas_put_coverage(canvas, px, py, color, coverage);
         }
+    }
+}
+
+void wm_canvas_fill_rounded(wm_canvas_t *canvas, wm_rect_t rect,
+                            uint32_t radius, uint32_t color)
+{
+    wm_corners_t corners = {radius, radius, radius, radius};
+    fill_shape(canvas, rect, &corners, color);
+}
+
+void wm_canvas_fill_shape(wm_canvas_t *canvas, wm_rect_t rect,
+                          uint32_t top_left, uint32_t top_right,
+                          uint32_t bottom_right, uint32_t bottom_left,
+                          uint32_t color)
+{
+    wm_corners_t corners = {top_left, top_right, bottom_right, bottom_left};
+    fill_shape(canvas, rect, &corners, color);
+}
+
+void wm_canvas_stroke_rounded(wm_canvas_t *canvas, wm_rect_t rect,
+                              uint32_t radius, uint32_t thickness,
+                              uint32_t color)
+{
+    if (!canvas || thickness == 0u || rect.w == 0u || rect.h == 0u) return;
+    if (thickness * 2u >= rect.w || thickness * 2u >= rect.h) {
+        wm_canvas_fill_rounded(canvas, rect, radius, color);
+        return;
+    }
+    /* An M3 outline is a ring: paint the outer shape, then knock the inner
+     * one back out. Doing it on a scratch row would be cheaper, but the
+     * shell strokes a handful of small components per frame, and this keeps
+     * the antialiasing identical to every other shape on screen. */
+    wm_rect_t visible = wm_rect_intersection(rect, canvas->clip);
+    if (visible.w == 0u || visible.h == 0u) return;
+
+    wm_rect_t inner = {rect.x + (int32_t)thickness, rect.y + (int32_t)thickness,
+                       rect.w - thickness * 2u, rect.h - thickness * 2u};
+    uint32_t inner_radius = radius > thickness ? radius - thickness : 0u;
+    wm_corners_t outer_corners = {radius, radius, radius, radius};
+    wm_corners_t inner_corners = {inner_radius, inner_radius,
+                                  inner_radius, inner_radius};
+
+    for (uint32_t row = 0u; row < visible.h; ++row) {
+        int32_t py = visible.y + (int32_t)row;
+        for (uint32_t col = 0u; col < visible.w; ++col) {
+            int32_t px = visible.x + (int32_t)col;
+            uint8_t outer = rounded_pixel_coverage((uint32_t)(px - rect.x),
+                                                   (uint32_t)(py - rect.y),
+                                                   rect.w, rect.h,
+                                                   &outer_corners);
+            if (outer == 0u) continue;
+            uint8_t hole = 0u;
+            if (px >= inner.x && py >= inner.y &&
+                px < inner.x + (int32_t)inner.w &&
+                py < inner.y + (int32_t)inner.h) {
+                hole = rounded_pixel_coverage((uint32_t)(px - inner.x),
+                                              (uint32_t)(py - inner.y),
+                                              inner.w, inner.h,
+                                              &inner_corners);
+            }
+            if (hole >= outer) continue;
+            wm_canvas_put_coverage(canvas, px, py, color,
+                                   (uint8_t)(outer - hole));
+        }
+    }
+}
+
+void wm_canvas_elevation_shadow(wm_canvas_t *canvas, wm_rect_t rect,
+                                uint32_t radius, m3_elevation_t level,
+                                uint32_t shadow_color, uint8_t opacity)
+{
+    uint32_t spread = m3_shadow_spread(level);
+    if (!canvas || spread == 0u || opacity == 0u) return;
+    int32_t offset_y = m3_shadow_offset_y(level);
+    uint32_t base_alpha = shadow_color >> 24u;
+    if (base_alpha == 0u) return;
+
+    /* M3's key light: a soft ramp under the component, tightest at its
+     * edge. Every raised surface in the shell -- windows, menus, dialogs,
+     * sheets, notification cards -- gets its shadow from here, so they all
+     * sit at the same apparent height for a given level. */
+    for (uint32_t layer = spread; layer > 0u; --layer) {
+        uint32_t strength = ((spread - layer + 1u) * 40u) / spread;
+        strength = (strength * base_alpha) / 255u;
+        strength = (strength * (uint32_t)opacity) / 255u;
+        if (strength == 0u) continue;
+        wm_rect_t halo = {rect.x - (int32_t)layer,
+                          rect.y - (int32_t)(layer / 2u) + offset_y,
+                          rect.w + layer * 2u, rect.h + layer * 2u};
+        wm_canvas_fill_rounded(canvas, halo, radius + layer,
+            (shadow_color & 0x00FFFFFFu) | ((strength & 0xFFu) << 24u));
     }
 }
 
@@ -380,6 +499,8 @@ void wm_canvas_blit_scaled(wm_canvas_t *canvas, wm_rect_t destination,
                            uint32_t source_height, uint8_t opacity,
                            uint32_t corner_radius)
 {
+    wm_corners_t corners = {corner_radius, corner_radius,
+                            corner_radius, corner_radius};
     if (!canvas || !source || destination.w == 0u || destination.h == 0u ||
         source_width == 0u || source_height == 0u || opacity == 0u) return;
 
@@ -407,7 +528,7 @@ void wm_canvas_blit_scaled(wm_canvas_t *canvas, wm_rect_t destination,
             int32_t px = visible.x + (int32_t)col;
             uint32_t local_x = (uint32_t)(px - destination.x);
             uint8_t coverage = rounded_pixel_coverage(local_x, local_y,
-                destination.w, destination.h, corner_radius);
+                destination.w, destination.h, &corners);
             if (coverage == 0u) continue;
             uint32_t source_x_fp = (uint32_t)(((uint64_t)local_x * max_source_x * 256u) /
                                               denom_x);

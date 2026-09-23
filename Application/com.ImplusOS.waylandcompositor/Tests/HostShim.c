@@ -249,12 +249,23 @@ window_id_t window_create(uint32_t w, uint32_t h, const char *t)
 void window_destroy(window_id_t w) { (void)w; }
 uint32_t *window_get_backing_store(window_id_t w, uint32_t *ow, uint32_t *oh)
 { (void)w; (void)ow; (void)oh; return NULL; }
+int32_t window_poll_resize(window_id_t w, uint32_t *ow, uint32_t *oh)
+{ (void)w; (void)ow; (void)oh; return 0; }
 void window_damage(window_id_t w, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 { (void)w; (void)a; (void)b; (void)c; (void)d; }
 void window_end_transaction(window_id_t w) { (void)w; }
 void window_show(window_id_t w) { (void)w; }
 void window_raise(window_id_t w) { (void)w; }
 int32_t window_set_surface_opaque(window_id_t w, bool o) { (void)w; (void)o; return 0; }
+/* The hosted backend asks for a positioned, undecorated session surface;
+ * on the host both are the same single buffer window_create() hands back. */
+window_id_t window_create_ex(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                             uint32_t bg, const char *t)
+{
+    (void)x; (void)y; (void)bg;
+    return window_create(w, h, t);
+}
+void window_set_system(window_id_t w, bool is_system) { (void)w; (void)is_system; }
 int32_t window_subscribe_keyboard(window_id_t w) { (void)w; return 0; }
 int32_t window_subscribe_mouse(window_id_t w) { (void)w; return 0; }
 int32_t window_input_keyboard_poll(input_keyboard_event_t *e) { (void)e; return 0; }

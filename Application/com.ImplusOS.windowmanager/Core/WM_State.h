@@ -10,29 +10,41 @@
 #include "../../../../Userland/API/Source/Graphics.h"
 #include "../../../../Userland/API/Source/WM_Protocol.h"
 #include "../../../../Userland/API/Source/WiFi.h"
+#include "../../../API/Source/Material.h"
 
 #define WM_MAX_WINDOWS                 128u
 #define WM_MAX_INPUT_SUBSCRIPTIONS     32u
 #define WM_MAX_NOTIFICATIONS           4u
 #define WM_MAX_NOTIFICATION_HISTORY    8u
-#define WM_MAX_LAUNCHER_APPS           24u
+#define WM_MAX_LAUNCHER_APPS           96u
 #define WM_MAX_DAMAGE_RECTS            32u
 #define WM_EVENT_QUEUE_SIZE            64u
 #define WM_TITLE_MAX                   64u
-#define WM_APP_NAME_MAX                40u
+#define WM_APP_NAME_MAX                48u
 #define WM_APP_PATH_MAX                128u
+/* Launch argument handed to the app's ELF. Bounded by the kernel's
+ * process_t.launch_argument (512 bytes, ProcessScheduler.h): anything longer
+ * would be truncated there instead, mid-flag. */
+#define WM_APP_ARG_MAX                 256u
+#define WM_APP_COMMENT_MAX             96u
 #define WM_THEME_PATH_MAX              128u
 #define WM_XML_MAX_BYTES               (256u * 1024u)
 #define WM_SURFACE_MAX_BYTES           (16u * 1024u * 1024u)
 
 #define WM_TASKBAR_AT_TOP              0
 
-#define WM_TITLE_HEIGHT                36u
-#define WM_CORNER_RADIUS               12u
-#define WM_SHADOW_SIZE                 10u
-#define WM_DOCK_HEIGHT                 25u
+/* Shell metrics, in Material Design 3 terms. The window frame is an M3
+ * "large" shape carrying level-3 elevation; its title bar holds a row of
+ * 32px icon buttons, which is the size M3 gives an icon button on a
+ * pointer-driven surface, at the compact end of the range M3 allows. */
+#define WM_TITLE_HEIGHT                32u
+#define WM_CORNER_RADIUS               M3_SHAPE_MEDIUM
+#define WM_SHADOW_SIZE                 8u
+#define WM_DOCK_HEIGHT                 40u
 #define WM_DOCK_MARGIN                 0u
-#define WM_TITLE_BUTTON_WIDTH          40u
+#define WM_TITLE_BUTTON_SIZE           26u
+#define WM_TITLE_BUTTON_GAP             1u
+#define WM_TITLE_BUTTON_MARGIN          4u
 #define WM_MIN_WINDOW_WIDTH            160u
 #define WM_MIN_WINDOW_HEIGHT           80u
 #define WM_CURSOR_WIDTH                14u
@@ -125,35 +137,25 @@ typedef enum {
     WM_CURSOR_RESIZE_DIAGONAL_NE_SW
 } wm_cursor_style_t;
 
+/* The shell's Material Design 3 theme: one seed colour expanded into the
+ * full set of M3 colour roles, the M3 type scale, and the handful of
+ * metrics that are the shell's own rather than the specification's.
+ *
+ * Nothing here is a one-off colour. Every surface, outline and piece of
+ * text the window manager paints names a role in `color`, so retinting the
+ * desktop is a matter of changing `seed` -- which is what the WM_SET_THEME
+ * message and the [Material] section of a .theme file both do. */
 typedef struct {
-    uint32_t bg_top;
-    uint32_t bg_mid;
-    uint32_t bg_bottom;
-    uint32_t bg_glow;
-    uint32_t surface;
-    uint32_t surface_alt;
-    uint32_t surface_hover;
-    uint32_t title_active;
-    uint32_t title_inactive;
-    uint32_t border;
-    uint32_t border_focus;
-    uint32_t accent;
-    uint32_t accent_alt;
-    uint32_t accent_soft;
-    uint32_t text;
-    uint32_t text_dim;
-    uint32_t danger;
-    uint32_t shadow;
-    uint32_t dock;
-    uint32_t dock_border;
-    uint32_t notification;
-    uint32_t title_height;
-    uint32_t corner_radius;
-    uint32_t shadow_size;
-    uint32_t dock_height;
-    float font_normal;
-    float font_small;
-    float font_title;
+    uint32_t seed;                 /* source colour for the tonal palettes */
+    bool dark;                     /* which of the two schemes was built   */
+    m3_scheme_t color;          /* the M3 colour roles                  */
+    m3_typescale_t type;        /* the M3 type scale, in pixels         */
+    float type_scale;              /* multiplier applied to that scale     */
+
+    uint32_t title_height;         /* window title bar                     */
+    uint32_t corner_radius;        /* window shape token                   */
+    uint32_t shadow_size;          /* window elevation spread              */
+    uint32_t dock_height;          /* navigation bar (taskbar)             */
 } wm_theme_t;
 
 typedef struct {
@@ -289,10 +291,49 @@ typedef struct {
     wm_icon_image_t logo;
 } wm_system_icons_t;
 
+/* Where an entry in the launcher came from, which is also how it is
+ * started. NATIVE is an ImplusOS ELF the kernel loads directly; LINUX is a
+ * foreign glibc binary that only reaches the screen through a host launcher
+ * (X11 via com.ImplusOS.linuxapp, Wayland via com.ImplusOS.gtk3demo), so
+ * `path` names that launcher and `argument` names the Linux program. */
+typedef enum {
+    WM_APP_KIND_NATIVE = 0,
+    WM_APP_KIND_LINUX
+} wm_app_kind_t;
+
+/* freedesktop.org menu categories, collapsed to the handful worth a section
+ * header here. wm_app_category_label() has the Japanese names. */
+typedef enum {
+    WM_APP_CATEGORY_SYSTEM = 0,
+    WM_APP_CATEGORY_INTERNET,
+    WM_APP_CATEGORY_DEVELOPMENT,
+    WM_APP_CATEGORY_GRAPHICS,
+    WM_APP_CATEGORY_MULTIMEDIA,
+    WM_APP_CATEGORY_OFFICE,
+    WM_APP_CATEGORY_GAME,
+    WM_APP_CATEGORY_UTILITY,
+    WM_APP_CATEGORY_OTHER,
+    WM_APP_CATEGORY_COUNT
+} wm_app_category_t;
+
 typedef struct {
     char name[WM_APP_NAME_MAX];
     char path[WM_APP_PATH_MAX];
+    char argument[WM_APP_ARG_MAX];
+    char comment[WM_APP_COMMENT_MAX];
+    /* Absolute path of a PNG to draw as the icon. Empty means "derive one":
+     * <dir-of-path>/Resource/App.png, and failing that the badge. */
+    char icon_path[WM_APP_PATH_MAX];
     char badge[4];
+    /* wm_icon_kind_t to draw when no icon file could be loaded, or -1 for
+     * the two-letter badge. Resolved from Icon= at startup, which is a
+     * string compare -- unlike a PNG lookup, which touches the disk. */
+    int32_t vector_icon;
+    wm_app_category_t category;
+    wm_app_kind_t kind;
+    /* Runs a foreign glibc binary, whether or not `kind` is LINUX -- see
+     * wm_desktop_entry_t.linux_backed. Drawn as a chip in the Start menu. */
+    bool linux_backed;
     uint32_t *icon_pixels;
     uint32_t icon_width;
     uint32_t icon_height;
@@ -385,6 +426,16 @@ typedef struct {
     bool scan_active;
 } wm_wifi_panel_t;
 
+typedef enum {
+    WM_MENU_ROW_HEADER = 0,   /* `value` is a wm_app_category_t */
+    WM_MENU_ROW_APP           /* `value` indexes wm_assets_t.apps[] */
+} wm_menu_row_kind_t;
+
+typedef struct {
+    uint16_t kind;
+    uint16_t value;
+} wm_menu_row_t;
+
 typedef struct {
     wm_scene_t scene;
     wm_compositor_t compositor;
@@ -406,6 +457,13 @@ typedef struct {
     bool launcher_open;
     uint32_t launcher_scroll;
     int32_t launcher_hover_index;
+    /* Start-menu keyboard selection, kept apart from the pointer's hover.
+     * They cannot share a field: the hover is recomputed from the cursor
+     * position on every pointer report -- and an absolute pointing device
+     * keeps reporting while it sits still -- so a shared field would be
+     * cleared again within milliseconds of an arrow key setting it. The
+     * pointer clears this one only when the cursor has actually moved. */
+    int32_t launcher_selected_index;
     uint32_t taskbar_hover_kind;
     uint32_t taskbar_hover_window_id;
     char clock_text[32];
@@ -413,7 +471,10 @@ typedef struct {
     char search_text[WM_SEARCH_MAX];
     uint32_t search_len;
     bool search_active;
-    uint32_t filter_indices[WM_MAX_LAUNCHER_APPS];
+    /* Start-menu viewport rows: section headers interleaved with app cards,
+     * so a category heading scrolls with the apps under it instead of being
+     * pinned. Sized for every app plus one header per category. */
+    wm_menu_row_t menu_rows[WM_MAX_LAUNCHER_APPS + WM_APP_CATEGORY_COUNT];
     uint32_t filter_count;
     uint32_t filter_generation;
     wm_dialog_t dialog;

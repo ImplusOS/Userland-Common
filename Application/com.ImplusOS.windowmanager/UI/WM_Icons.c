@@ -1,4 +1,5 @@
 #include "WM_Icons.h"
+#include <string.h>
 #include "../Compositor/WM_Raster.h"
 #include "../Core/WM_Assets.h"
 
@@ -36,6 +37,11 @@ static const char *const k_icon_file[] = {
     [WM_ICON_CHEVRON_UP]    = "expand_less",
     [WM_ICON_TERMINAL]      = "terminal",
     [WM_ICON_EDIT]          = "edit",
+    [WM_ICON_ARROW_BACK]    = "arrow_back",
+    [WM_ICON_MEMORY]        = "memory",
+    [WM_ICON_INFO]          = "info",
+    [WM_ICON_WARNING]       = "warning",
+    [WM_ICON_ERROR]         = "error",
 };
 #define ICON_COUNT ((int)(sizeof(k_icon_file) / sizeof(k_icon_file[0])))
 
@@ -156,4 +162,49 @@ void wm_icon_draw_cursor(wm_canvas_t *canvas, int32_t x, int32_t y,
         else if (nwse) wm_canvas_line(canvas, cx - 6 + o, cy - 6, cx + 6 + o, cy + 6, lc);
         else           wm_canvas_line(canvas, cx + 6 + o, cy - 6, cx - 6 + o, cy + 6, lc);
     }
+}
+
+int32_t wm_icon_kind_from_name(const char *name)
+{
+    if (!name || !*name) return -1;
+    static const struct {
+        const char *name;
+        wm_icon_kind_t kind;
+    } table[] = {
+        {"utilities-terminal",          WM_ICON_TERMINAL},
+        {"terminal",                    WM_ICON_TERMINAL},
+        {"system-file-manager",         WM_ICON_FOLDER},
+        {"folder",                      WM_ICON_FOLDER},
+        {"inode-directory",             WM_ICON_FOLDER},
+        {"accessories-text-editor",     WM_ICON_EDIT},
+        {"text-editor",                 WM_ICON_EDIT},
+        {"text-x-generic",              WM_ICON_DOC},
+        {"preferences-system",          WM_ICON_SETTINGS},
+        {"preferences-desktop",         WM_ICON_SETTINGS},
+        {"utilities-system-monitor",    WM_ICON_MEMORY},
+        {"system-monitor",              WM_ICON_MEMORY},
+        /* A browser is not a network indicator. These used to map to the
+         * Wi-Fi glyph, which is why Chromium sat in the Start menu wearing
+         * one. Nothing in the drawn set is a browser, so they fall through
+         * to whatever icon file the entry names -- which for Chromium is
+         * its own product logo, in Resource/Icons/Apps. */
+        {"network-wireless",            WM_ICON_WIFI},
+        {"network-workgroup",           WM_ICON_WIFI},
+        {"multimedia-volume-control",   WM_ICON_VOLUME},
+        {"audio-x-generic",             WM_ICON_VOLUME},
+        {"system-users",                WM_ICON_PERSON},
+        {"avatar-default",              WM_ICON_PERSON},
+        {"system-shutdown",             WM_ICON_POWER},
+        {"system-search",               WM_ICON_SEARCH},
+        {"input-keyboard",              WM_ICON_IME},
+        {"applications-development",    WM_ICON_APPS},
+        {"applications-games",          WM_ICON_APPS},
+        {"applications-system",         WM_ICON_APPS},
+        {"applications-utilities",      WM_ICON_APPS},
+        {"applications-other",          WM_ICON_APPS},
+    };
+    for (uint32_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
+        if (strcmp(table[i].name, name) == 0) return (int32_t)table[i].kind;
+    }
+    return -1;
 }

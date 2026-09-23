@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=BusyBox
+Comment=Native shell session
+Comment[ja]=ネイティブのシェルセッション
+Exec=/Userland/BusyBox/BusyBox.ELF
+Icon=utilities-terminal
+Categories=Utility;

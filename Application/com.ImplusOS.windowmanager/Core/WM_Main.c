@@ -96,6 +96,16 @@ static bool wm_service_do_deferred_work(wm_state_t *state)
 
     if (state->assets.metadata_loaded && !state->assets.icons_loaded) {
         bool loaded_one = wm_assets_load_next_icon(&state->assets);
+        /* The desktop-icon grid is painted into the static background, and
+         * it draws each icon with the artwork of the launcher entry it
+         * points at -- which only exists once the icons have been loaded.
+         * Regenerate once, when the last one lands, or the desktop keeps
+         * the generic glyphs it was drawn with at startup. */
+        if (state->assets.icons_loaded) {
+            wm_compositor_generate_background(state);
+            wm_compositor_damage_all(state);
+            return true;
+        }
         if (loaded_one) {
             wm_service_damage_visible_chrome(state);
             return true;
@@ -110,6 +120,7 @@ void wm_service_init(wm_state_t *state)
     if (!state) return;
     memset(state, 0, sizeof(*state));
     state->launcher_hover_index = -1;
+    state->launcher_selected_index = -1;
     state->wifi_panel.selected_index = -1;
     /* Sentinel: no valid search_len can ever equal this, so the Start Menu's
      * filter cache is always (re)built the first time it's needed instead
@@ -120,12 +131,14 @@ void wm_service_init(wm_state_t *state)
     wm_event_queue_init(&state->event_queue);
     wm_theme_set_defaults(&state->theme);
 
-    if (!wm_theme_load(&state->theme,
-            "/Userland/com.ImplusOS.windowmanager"
-            "/Resource/Themes/plasma.theme")) {
+    /* The user's own theme first, then the M3 light scheme shipped with the
+     * image. Failing both, wm_theme_set_defaults() above has already left a
+     * complete M3 baseline theme in place, so the shell never draws with an
+     * empty palette. */
+    if (!wm_theme_load(&state->theme, "/var/System/shell.theme")) {
         (void)wm_theme_load(&state->theme,
             "/Userland/com.ImplusOS.windowmanager"
-            "/Resource/Themes/midnight.theme");
+            "/Resource/Themes/Material.theme");
     }
 
     (void)wm_assets_init_metadata(&state->assets);

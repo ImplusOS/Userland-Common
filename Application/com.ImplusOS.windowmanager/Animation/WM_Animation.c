@@ -3,17 +3,6 @@
 #include "../Compositor/WM_Damage.h"
 #include "../SceneGraph/WM_Node.h"
 
-static float ease_out_cubic(float value)
-{
-    float inverse = 1.0f - value;
-    return 1.0f - inverse * inverse * inverse;
-}
-
-static float ease_in_cubic(float value)
-{
-    return value * value * value;
-}
-
 void wm_animation_start(wm_state_t *state, wm_window_t *window,
                         wm_transition_t transition, uint32_t duration_ms)
 {
@@ -49,7 +38,9 @@ bool wm_animation_tick(wm_state_t *state, uint64_t now_ms)
             (float)elapsed / (float)window->transition_duration_ms;
         bool appearing = window->transition == WM_TRANSITION_SHOW ||
                          window->transition == WM_TRANSITION_RESTORE;
-        float eased = appearing ? ease_out_cubic(progress) : ease_in_cubic(progress);
+        float eased = m3_ease(appearing ? M3_EASE_EMPHASIZED_DECELERATE
+                                       : M3_EASE_EMPHASIZED_ACCELERATE,
+                              progress);
         if (appearing) {
             window->visual_alpha = eased;
             window->visual_scale = 0.92f + 0.08f * eased;

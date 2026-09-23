@@ -16,6 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Body colour of the pointer sprite. See draw_cursor() for why this is not
+ * a scheme role. */
+#define WM_CURSOR_FILL 0xFFFFFFFFu
+
 static wm_rect_t display_bounds(const wm_state_t *state)
 {
     return (wm_rect_t){0, 0, state->compositor.framebuffer_width,
@@ -109,7 +113,7 @@ void wm_compositor_generate_background(wm_state_t *state)
                    state->compositor.framebuffer_width,
                    state->compositor.framebuffer_height,
                    state->compositor.framebuffer_width);
-    wm_canvas_fill(&canvas, display_bounds(state), state->theme.bg_bottom);
+    wm_canvas_fill(&canvas, display_bounds(state), state->theme.color.surface_dim);
     if (state->assets.wallpaper_pixels) {
         uint32_t fb_w = state->compositor.framebuffer_width;
         uint32_t fb_h = state->compositor.framebuffer_height;
@@ -206,20 +210,21 @@ static void draw_default_cursor(wm_state_t *state, wm_canvas_t *canvas,
     for (uint32_t row = 0; row < WM_CURSOR_HEIGHT; ++row)
         for (uint32_t col = 0; col < WM_CURSOR_WIDTH; ++col)
             if (shape[row][col] != '.')
-                wm_canvas_put(canvas, x+(int32_t)col+2, y+(int32_t)row+2, 0x33000000u);
+                wm_canvas_put(canvas, x+(int32_t)col+2, y+(int32_t)row+2,
+                    m3_alpha(state->theme.color.scrim, 20u));
     for (uint32_t row = 0; row < WM_CURSOR_HEIGHT; ++row)
         for (uint32_t col = 0; col < WM_CURSOR_WIDTH; ++col) {
             if (shape[row][col] == '.') continue;
             wm_canvas_put(canvas, x+(int32_t)col, y+(int32_t)row,
-                shape[row][col]=='F' ? state->theme.text : 0xFF1A1A1Au);
+                shape[row][col]=='F' ? WM_CURSOR_FILL : state->theme.color.scrim);
         }
 }
 
 static void draw_resize_cursor(wm_state_t *state, wm_canvas_t *canvas,
                                int32_t x, int32_t y)
 {
-    uint32_t color   = state->theme.text;
-    uint32_t outline = 0x99000000u;
+    uint32_t color   = WM_CURSOR_FILL;
+    uint32_t outline = m3_alpha(state->theme.color.scrim, 60u);
     int32_t cx = x+7, cy = y+7;
     bool hz = state->scene.cursor_style == WM_CURSOR_RESIZE_HORIZONTAL;
     bool vt = state->scene.cursor_style == WM_CURSOR_RESIZE_VERTICAL;
@@ -238,12 +243,15 @@ static void draw_cursor(wm_state_t *state, wm_canvas_t *canvas)
     if (!state->scene.cursor_visible) return;
     int32_t x = (int32_t)state->scene.cursor_x;
     int32_t y = (int32_t)state->scene.cursor_y;
-    /* Material-style white pointer with a dark edge, readable on any
-     * background (see UI/WM_Icons.c). */
+    /* The pointer is the one thing on screen that has no container to be
+     * legible against -- it crosses the wallpaper, every window's own
+     * surface and whatever a Linux program is drawing -- so it keeps M3's
+     * white body and scrim edge in both schemes instead of taking a tone
+     * from the current one. */
     (void)draw_default_cursor;
     (void)draw_resize_cursor;
     wm_icon_draw_cursor(canvas, x, y, state->scene.cursor_style,
-                        0xFFFFFFFFu, 0xFF1A1A1Au);
+                        WM_CURSOR_FILL, state->theme.color.scrim);
 }
 
 static void draw_cursor_on_shadow(wm_state_t *state)

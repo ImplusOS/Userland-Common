@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=FastFetch
+Comment=System summary, from the stock Debian binary
+Comment[ja]=Debian 版バイナリそのままのシステム情報表示
+Exec=/Userland/FastFetch/FastFetch.ELF
+Icon=utilities-system-monitor
+Categories=System;
+X-ImplusOS-Linux=true
