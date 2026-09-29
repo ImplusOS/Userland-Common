@@ -19,12 +19,14 @@
  * with the Terminal launcher. If a terminal is already open, this joins that
  * server instead of starting a second one on the same display.
  *
- * Environment variables cannot be passed through process_spawn, so the
- * foreign-ELF envp is assembled kernel-side in ProcessManager_Create.c
- * (glibc_envp): DISPLAY=:0 is required -- Xlib does not fall back to :0 and
- * XOpenDisplay(NULL) simply fails -- along with LIBGL_ALWAYS_SOFTWARE,
- * GALLIUM_DRIVER=llvmpipe and DOOMWADDIR.
+ * Environment variables are this launcher's business, not the kernel's:
+ * linux_env_add_doom() below names the IWAD/soundfont and the null audio
+ * backends, and xsession_run_env() adds the DISPLAY=:0, XKB_CONFIG_ROOT and
+ * LIBGL_ALWAYS_SOFTWARE/GALLIUM_DRIVER=llvmpipe every X client on this
+ * display needs (Userland/API/Source/LinuxEnv.c). The kernel only supplies
+ * the generic defaults (PATH, HOME, locale, XDG_*).
  */
+#include "LinuxEnv.h"
 
 #define DOOM_PATH "/Userland/Doom/Resource/linuxxdoom-x86_64"
 
@@ -44,7 +46,11 @@ void _start(void)
         process_exit(1);
     }
 
-    int32_t status = xsession_run(&session, DOOM_PATH, NULL);
+    linux_env_t env;
+    linux_env_init(&env);
+    linux_env_add_doom(&env);
+    int32_t status = xsession_run_env(&session, DOOM_PATH, NULL,
+                                      linux_env_entries(&env));
     if (status < 0) {
         serial_write_string("[doom] could not start linuxxdoom\n");
     }

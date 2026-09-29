@@ -33,18 +33,21 @@
  *
  * THE LIBRARY PATH
  *
- * LD_LIBRARY_PATH is the shared table kernel-side in ProcessManager_Create.c
- * (/lib64:/usr/lib/x86_64-linux-gnu:/usr/lib) and does NOT name this
- * directory. That is fine: unlike Chrome, Firefox's launcher dlopens every
- * entry of dependentlibs.list by absolute path derived from its own
- * directory, so the app tree is self-contained. Everything Firefox needs
- * from outside it (libX11/libgtk-3/libfontconfig/libasound, ...) is already
- * in the staged glibc closure -- see Vendor/LinuxRuntime and
+ * LD_LIBRARY_PATH is a generic default the kernel hands every Linux-ABI
+ * process (OS_CONFIG_LINUX_RUNTIME_LIB_PATH in Kernel/Source/include/
+ * kernel/config.h: /lib64:/usr/lib/x86_64-linux-gnu:/usr/lib) and does NOT
+ * name this directory. That is fine: unlike Chrome, Firefox's launcher
+ * dlopens every entry of dependentlibs.list by absolute path derived from
+ * its own directory, so the app tree is self-contained. Everything Firefox
+ * needs from outside it (libX11/libgtk-3/libfontconfig/libasound, ...) is
+ * already in the staged glibc closure -- see Vendor/LinuxRuntime and
  * Docs/Others/TODO_Chromium_LinuxABI.md.
  *
  * Everything else Firefox wants from the system -- DISPLAY, FONTCONFIG_*,
  * HOME/XDG_* (all /tmp, tmpfs), LANG, and the "do not autolaunch D-Bus"
- * address -- is likewise part of that shared glibc_envp table.
+ * address -- is likewise already covered: the first two by the shared
+ * environment xsession_run() builds (API/Source/LinuxEnv.c), the rest by
+ * the kernel's generic defaults.
  *
  * process_spawn_with_arg() takes one argument string that the kernel splits
  * on whitespace into argv[1..] (no quoting -- see LINUX_ARGV_MAX in

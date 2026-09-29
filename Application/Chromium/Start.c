@@ -18,11 +18,13 @@
  * Userland/API/Source/XSession.c, and Chromium is then spawned as an ordinary
  * client of that server.
  *
- * DISPLAY=:0, FONTCONFIG_PATH, LANG/LC_ALL, HOME/XDG_* and the D-Bus
- * "refuse immediately" address are all part of the shared glibc_envp table
- * assembled kernel-side in ProcessManager_Create.c -- see that file for why
- * each one is there. Nothing Chromium-specific needs to be added to it: the
- * dbus/inotify ERROR lines it prints on startup are logged and harmless
+ * DISPLAY=:0, FONTCONFIG_PATH, the D-Bus "refuse immediately" address and
+ * the rest of the desktop-stack variables come from the shared environment
+ * xsession_run() builds (API/Source/LinuxEnv.c); LANG/LC_ALL, HOME/XDG_*,
+ * SHELL/TERM and LD_LIBRARY_PATH are the kernel's generic defaults for a
+ * Linux-ABI process (ProcessManager_Create.c). Nothing Chromium-specific
+ * needs to be added to either: the dbus/inotify ERROR lines it prints on
+ * startup are logged and harmless
  * (Docs/Others/TODO_Chromium_LinuxABI.md 10.-3).
  *
  * process_spawn_with_arg() takes one argument string that the kernel splits

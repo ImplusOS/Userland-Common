@@ -545,6 +545,27 @@ int32_t process_spawn_with_arg(const char *path, const char *argument)
         (uint64_t)argument));
 }
 
+/* Spawn with an environment of the caller's choosing: `envp` is a
+ * NULL-terminated array of "NAME=VALUE" pointers (see API/Source/LinuxEnv.c
+ * for building one), or NULL for the kernel's generic defaults alone.
+ *
+ * This exists so that no application-, toolkit- or service-specific variable
+ * has to live in the kernel: the kernel only appends defaults for keys this
+ * array does not already name, so a duplicate key can never reach the child.
+ * A native (ImplusOS-ABI) child ignores the environment entirely -- it reads
+ * its arguments through process_get_launch_argument(). */
+int32_t process_spawn_with_env(const char *path, const char *argument,
+                               const char *const *envp)
+{
+    if (!path) {
+        os_set_errno(EINVAL);
+        return -1;
+    }
+    return os_errno_from_i32_status((int32_t)syscall3(
+        SYSCALL_PROCESS_SPAWN_ELF_ENV, (uint64_t)path,
+        (uint64_t)((argument != NULL) ? argument : ""), (uint64_t)envp));
+}
+
 int32_t process_get_launch_argument(char *buffer, uint32_t capacity)
 {
     if (!buffer || capacity == 0u) {

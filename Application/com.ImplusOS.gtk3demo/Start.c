@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "LinuxEnv.h"
 #include "Process.h"
 #include "Serial.h"
 #include "Socket.h"
@@ -82,11 +83,24 @@ void _start(void)
         }
     }
 
+    /* GTK3's own environment -- GDK_BACKEND and the GSettings/fontconfig/
+     * gdk-pixbuf/D-Bus variables gtk_init() reads -- is assembled here
+     * (API/Source/LinuxEnv.c), not in the kernel: it belongs to whoever
+     * starts a GTK program, and this launcher is the one that knows it is
+     * starting one. The x11 group comes along because GDK_BACKEND is
+     * "wayland,x11": if the compositor is not the backend that answers, the
+     * fallback display still has to be named. */
+    linux_env_t env;
+    linux_env_init(&env);
+    linux_env_add_x11(&env);
+    linux_env_add_desktop(&env);
+
     serial_write_string("[gtk3demo] starting ");
     serial_write_string(client);
     serial_write_string("\n");
 
-    int32_t pid = process_spawn(client);
+    int32_t pid = process_spawn_with_env(client, "",
+                                         linux_env_entries(&env));
     if (pid < 0) {
         if (compositor > 0) (void)process_kill(compositor);
         process_exit(1);
