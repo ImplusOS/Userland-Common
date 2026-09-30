@@ -17,6 +17,7 @@
 #include "../UI/WM_WifiPanel.h"
 #include "../../../../Userland/Source/Syscalls.h"
 #include "../../../../Userland/API/Source/Process.h"
+#include "../../../../Userland/API/Source/Serial.h"
 #include "../../../../Userland/API/Source/Time.h"
 
 #include <string.h>
@@ -26,14 +27,166 @@ wm_state_t g_wm_state;
 #define CLOCK_UPDATE_INTERVAL_MS 1000u
 #define WM_IPC_DRAIN_BUDGET 64u
 #define WM_EVENT_PROCESS_BUDGET 64u
-#define WM_POINTER_IDLE_POLL_MS 16u
-#define WM_POINTER_ACTIVE_POLL_MS 4u
+#define WM_POINTER_IDLE_POLL_MS 0u
+#define WM_POINTER_ACTIVE_POLL_MS 0u
 #define WM_POINTER_ACTIVE_WINDOW_MS 96u
-#define WM_IDLE_SLEEP_MS 30u
-#define WM_ACTIVE_SLEEP_MS 4u
+/* Every sleep here is rounded up to a scheduler tick (250 Hz -> 4 ms), so
+ * these are "yield at least once per loop" values, not busy-spins: a longer
+ * idle sleep only adds its own remainder to pointer latency, because input is
+ * harvested solely when a process reads it (TIMER_RUN_DRIVER_POLLS_IN_IRQ is
+ * off), and a 30 ms sleep here used to hold a click for most of that time. */
+#define WM_IDLE_SLEEP_MS 1u
+#define WM_ACTIVE_SLEEP_MS 1u
 #define WM_DEFERRED_START_DELAY_MS 500u
 #define WM_DEFERRED_STEP_DELAY_MS 50u
 #define WM_FRAME_INTERVAL_MS 16u
+
+/* [ktr] WC -- third stage of the keystroke trace whose kernel half is
+ * Kernel/Source/Debug/KeyTrace.h: this loop rendered a frame after a key was
+ * consumed. RD->OUT is the input path, OUT->MD is X getting the key and the
+ * client painting it, MD->WC is this compositor, and WC->the harness seeing
+ * new pixels is the flip. Off unless the build passes -DKEY_TRACE=1, which
+ * for this Makefile means OPT_FLAGS (the only hook it has on extra flags).
+ *
+ * One line per keystroke, not per frame: Chromium's window gets damaged
+ * several times between a key and the frame that shows it, and tracing every
+ * one would put ~60 synchronous UART writes a second in this loop -- the
+ * [wmdbg] line above records exactly how much that costs. */
+#ifndef KEY_TRACE
+#define KEY_TRACE 0
+#endif
+static uint32_t s_key_owed = 0u;
+
+#if KEY_TRACE
+static void wm_key_trace_frame(void)
+{
+    char line[48];
+    uint64_t ms = get_uptime_ms();
+    uint32_t n = 0u;
+    char digits[20];
+    uint32_t nd = 0u;
+
+    /* Rate-limit: log up to 4 frames after a keystroke to catch the actual
+     * paint frame, avoiding mis-attribution to an unrelated dirty frame. */
+    static uint32_t s_frame_count = 0u;
+    if (s_key_owed == 0u) {
+        s_frame_count = 0u;
+        return;
+    }
+    line[n++] = '['; line[n++] = 'k'; line[n++] = 't';
+    line[n++] = 'r'; line[n++] = ']'; line[n++] = ' ';
+    line[n++] = 'W'; line[n++] = 'C'; line[n++] = ' ';
+    do {
+        digits[nd++] = (char)('0' + (char)(ms % 10u));
+        ms /= 10u;
+    } while (ms != 0u);
+    while (nd != 0u) {
+        line[n++] = digits[--nd];
+    }
+    line[n++] = ' ';
+    do {
+        digits[nd++] = (char)('0' + (char)(s_frame_count % 10u));
+        s_frame_count /= 10u;
+    } while (s_frame_count != 0u);
+    while (nd != 0u) {
+        line[n++] = digits[--nd];
+    }
+    line[n++] = '\n';
+    line[n] = '\0';
+    serial_write_string(line);
+    s_frame_count++;
+    if (s_frame_count >= 4u) {
+        s_key_owed = 0u;
+        s_frame_count = 0u;
+    }
+}
+#else
+static void wm_key_trace_frame(void)
+{
+    (void)s_key_owed;
+}
+#endif
+
+/* Per-second timing line on COM1, used while chasing pointer latency: it
+ * splits one loop iteration into IPC / input / misc / render and reports the
+ * worst time from "raw mouse event consumed" to "frame flushed".
+ *
+ * Off by default: the line itself costs ~130 UART characters of synchronous
+ * busy-wait inside this loop (~11 ms at 115200 baud), which showed up as
+ * gap_max=12 ms and smeared the very latencies it reports. Build with
+ * -DWM_DEBUG_TIMING=1 to bring it back while diagnosing. */
+#ifndef WM_DEBUG_TIMING
+#define WM_DEBUG_TIMING 0
+#endif
+enum {
+    WM_DBG_IPC = 0,     /* IPC drain + queued event handling */
+    WM_DBG_INPUT,       /* keyboard + pointer poll, incl. route_mouse() */
+    WM_DBG_MISC,        /* deferred work, panels, clock, animation ticks */
+    WM_DBG_RENDER,      /* wm_compositor_render() */
+    WM_DBG_PHASES
+};
+
+typedef struct {
+    uint64_t window_start_ms;
+    uint64_t gap_max_ms;                /* slowest loop iteration */
+    uint64_t phase_max_ms[WM_DBG_PHASES];
+    uint64_t in2out_max_ms;             /* mouse consumed -> frame flushed */
+    uint64_t input_pending_ms;          /* 0 = no unconsumed measurement */
+    uint32_t iterations;
+    uint32_t render_count;
+    uint32_t input_count;
+} wm_dbg_t;
+
+static wm_dbg_t g_wm_dbg;
+
+static void wm_dbg_reset_window(uint64_t now_ms)
+{
+    g_wm_dbg.window_start_ms  = now_ms;
+    g_wm_dbg.gap_max_ms       = 0u;
+    g_wm_dbg.in2out_max_ms    = 0u;
+    g_wm_dbg.input_pending_ms = 0u;
+    g_wm_dbg.iterations       = 0u;
+    g_wm_dbg.render_count     = 0u;
+    g_wm_dbg.input_count      = 0u;
+    for (uint32_t i = 0; i < WM_DBG_PHASES; ++i)
+        g_wm_dbg.phase_max_ms[i] = 0u;
+}
+
+static void wm_dbg_acc(uint32_t phase, uint64_t duration_ms)
+{
+    if (phase < WM_DBG_PHASES && duration_ms > g_wm_dbg.phase_max_ms[phase])
+        g_wm_dbg.phase_max_ms[phase] = duration_ms;
+}
+
+static void wm_dbg_flush_if_due(uint64_t now_ms)
+{
+#if WM_DEBUG_TIMING
+    if (now_ms - g_wm_dbg.window_start_ms < 1000u) return;
+
+    serial_write_string("[wmdbg] t=");
+    serial_write_uint64(now_ms);
+    serial_write_string(" gap=");
+    serial_write_uint64(g_wm_dbg.gap_max_ms);
+    serial_write_string(" ipc=");
+    serial_write_uint64(g_wm_dbg.phase_max_ms[WM_DBG_IPC]);
+    serial_write_string(" in=");
+    serial_write_uint64(g_wm_dbg.phase_max_ms[WM_DBG_INPUT]);
+    serial_write_string(" misc=");
+    serial_write_uint64(g_wm_dbg.phase_max_ms[WM_DBG_MISC]);
+    serial_write_string(" rnd=");
+    serial_write_uint64(g_wm_dbg.render_count);
+    serial_write_char('/');
+    serial_write_uint64(g_wm_dbg.phase_max_ms[WM_DBG_RENDER]);
+    serial_write_string(" in2out=");
+    serial_write_uint64(g_wm_dbg.in2out_max_ms);
+    serial_write_string(" ev=");
+    serial_write_uint64(g_wm_dbg.input_count);
+    serial_write_char('\n');
+    wm_dbg_reset_window(now_ms);
+#else
+    (void)now_ms;
+#endif
+}
 
 static const char *const WM_FONT_PATH =
     "/Userland/com.ImplusOS.windowmanager"
@@ -190,9 +343,18 @@ void wm_service_main_loop(void)
     uint64_t last_pointer_poll_ms = 0u;
     uint64_t pointer_active_until_ms = 0u;
     uint64_t next_deferred_work_ms = get_uptime_ms() + WM_DEFERRED_START_DELAY_MS;
+    uint64_t prev_iter_ms = get_uptime_ms();
+    wm_dbg_reset_window(prev_iter_ms);
 
     while (g_wm_state.running) {
         bool did_work = false;
+        uint64_t iter_ms = get_uptime_ms();
+        uint64_t gap_ms = iter_ms - prev_iter_ms;
+        prev_iter_ms = iter_ms;
+        if (gap_ms > g_wm_dbg.gap_max_ms) g_wm_dbg.gap_max_ms = gap_ms;
+        ++g_wm_dbg.iterations;
+        wm_dbg_flush_if_due(iter_ms);
+        uint64_t phase_ms = iter_ms;
         ipc_message_t incoming;
         uint32_t ipc_drained = 0u;
         while (ipc_drained < WM_IPC_DRAIN_BUDGET &&
@@ -217,9 +379,15 @@ void wm_service_main_loop(void)
             ++events_processed;
             wm_ipc_handle_message(&g_wm_state, &event);
         }
+        {
+            uint64_t now_phase_ms = get_uptime_ms();
+            wm_dbg_acc(WM_DBG_IPC, now_phase_ms - phase_ms);
+            phase_ms = now_phase_ms;
+        }
 
         if (wm_input_poll_raw_keyboard(&g_wm_state)) {
             did_work = true;
+            s_key_owed = 1u;
         }
 
         uint64_t now_ms = get_uptime_ms();
@@ -231,7 +399,15 @@ void wm_service_main_loop(void)
             if (wm_input_poll_raw_mouse(&g_wm_state)) {
                 did_work = true;
                 pointer_active_until_ms = now_ms + WM_POINTER_ACTIVE_WINDOW_MS;
+                ++g_wm_dbg.input_count;
+                if (g_wm_dbg.input_pending_ms == 0u)
+                    g_wm_dbg.input_pending_ms = get_uptime_ms();
             }
+        }
+        {
+            uint64_t now_phase_ms = get_uptime_ms();
+            wm_dbg_acc(WM_DBG_INPUT, now_phase_ms - phase_ms);
+            phase_ms = now_phase_ms;
         }
 
         if (now_ms - last_display_poll_ms >= 250u) {
@@ -268,7 +444,12 @@ void wm_service_main_loop(void)
                 did_work = true;
             }
         }
-        
+        {
+            uint64_t now_phase_ms = get_uptime_ms();
+            wm_dbg_acc(WM_DBG_MISC, now_phase_ms - phase_ms);
+            phase_ms = now_phase_ms;
+        }
+
         bool animating     = wm_animation_tick(&g_wm_state, now_ms);
         bool notifications = wm_notification_tick(&g_wm_state, now_ms);
 
@@ -277,12 +458,28 @@ void wm_service_main_loop(void)
             (animating || notifications || pending_frame)) {
             wm_compositor_render(&g_wm_state, now_ms);
             g_wm_state.compositor.next_frame_ms = now_ms + WM_FRAME_INTERVAL_MS;
+            wm_key_trace_frame();
             did_work = true;
+            ++g_wm_dbg.render_count;
+            uint64_t flushed_ms = get_uptime_ms();
+            wm_dbg_acc(WM_DBG_RENDER, flushed_ms - phase_ms);
+            if (g_wm_dbg.input_pending_ms != 0u) {
+                uint64_t in2out_ms = flushed_ms - g_wm_dbg.input_pending_ms;
+                if (in2out_ms > g_wm_dbg.in2out_max_ms)
+                    g_wm_dbg.in2out_max_ms = in2out_ms;
+                g_wm_dbg.input_pending_ms = 0u;
+            }
         } else if (!animating && !notifications && !pending_frame) {
+            if (g_wm_dbg.input_pending_ms != 0u &&
+                now_ms - g_wm_dbg.input_pending_ms > 100u)
+                g_wm_dbg.input_pending_ms = 0u;   /* no frame: not measurable */
             sleep_ms((did_work || now_ms < pointer_active_until_ms) ?
                          WM_ACTIVE_SLEEP_MS : WM_IDLE_SLEEP_MS);
             continue;
         }
+        if (g_wm_dbg.input_pending_ms != 0u &&
+            now_ms - g_wm_dbg.input_pending_ms > 100u)
+            g_wm_dbg.input_pending_ms = 0u;
         sleep_ms((did_work || now_ms < pointer_active_until_ms) ?
                      1u : WM_ACTIVE_SLEEP_MS);
     }

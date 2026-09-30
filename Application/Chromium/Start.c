@@ -86,7 +86,8 @@
     "--ozone-platform=x11 " \
     "--window-position=0,0 --window-size=1024,680 " \
     "--user-data-dir=/tmp/chrome-profile " \
-    "--ignore-gpu-blocklist"
+    "--ignore-gpu-blocklist " \
+    "--no-first-run"
 
 /* Optional: when this file exists its contents (switches and/or URLs,
  * whitespace separated, newlines allowed) take the place of
