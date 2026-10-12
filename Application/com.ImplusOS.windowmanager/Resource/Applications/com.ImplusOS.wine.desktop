@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Wine Configuration
+Name[ja]=Wine 設定
+Comment=Run Windows programs through Wine on the Linux ABI layer
+Comment[ja]=Linux ABI互換層上のWineでWindowsプログラムを実行
+Exec=/Userland/Wine/Wine.ELF
+Icon=wine
+Categories=System;Emulator;
+X-ImplusOS-Linux=true
+X-ImplusOS-Geometry=1024x680
