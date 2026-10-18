@@ -152,11 +152,13 @@ static void wm_dbg_reset_window(uint64_t now_ms)
         g_wm_dbg.phase_max_ms[i] = 0u;
 }
 
+#if WM_DEBUG_TIMING
 static void wm_dbg_acc(uint32_t phase, uint64_t duration_ms)
 {
     if (phase < WM_DBG_PHASES && duration_ms > g_wm_dbg.phase_max_ms[phase])
         g_wm_dbg.phase_max_ms[phase] = duration_ms;
 }
+#endif
 
 static void wm_dbg_flush_if_due(uint64_t now_ms)
 {
@@ -348,13 +350,21 @@ void wm_service_main_loop(void)
 
     while (g_wm_state.running) {
         bool did_work = false;
+        /* The loop's single clock read. get_uptime_ms() is a syscall, and the
+         * phase stamps below used to add five more of them per iteration
+         * (~1250 syscalls/s at the 4 ms tick) purely for the [wmdbg] line.
+         * One read per iteration is also the more consistent choice: the
+         * decisions in an iteration (poll interval, frame deadline, clock
+         * update) all see one timestamp instead of five different ones. */
         uint64_t iter_ms = get_uptime_ms();
         uint64_t gap_ms = iter_ms - prev_iter_ms;
         prev_iter_ms = iter_ms;
         if (gap_ms > g_wm_dbg.gap_max_ms) g_wm_dbg.gap_max_ms = gap_ms;
         ++g_wm_dbg.iterations;
         wm_dbg_flush_if_due(iter_ms);
+#if WM_DEBUG_TIMING
         uint64_t phase_ms = iter_ms;
+#endif
         ipc_message_t incoming;
         uint32_t ipc_drained = 0u;
         while (ipc_drained < WM_IPC_DRAIN_BUDGET &&
@@ -379,18 +389,20 @@ void wm_service_main_loop(void)
             ++events_processed;
             wm_ipc_handle_message(&g_wm_state, &event);
         }
+#if WM_DEBUG_TIMING
         {
             uint64_t now_phase_ms = get_uptime_ms();
             wm_dbg_acc(WM_DBG_IPC, now_phase_ms - phase_ms);
             phase_ms = now_phase_ms;
         }
+#endif
 
         if (wm_input_poll_raw_keyboard(&g_wm_state)) {
             did_work = true;
             s_key_owed = 1u;
         }
 
-        uint64_t now_ms = get_uptime_ms();
+        uint64_t now_ms = iter_ms;
         uint32_t pointer_poll_ms =
             now_ms < pointer_active_until_ms ?
                 WM_POINTER_ACTIVE_POLL_MS : WM_POINTER_IDLE_POLL_MS;
@@ -401,14 +413,16 @@ void wm_service_main_loop(void)
                 pointer_active_until_ms = now_ms + WM_POINTER_ACTIVE_WINDOW_MS;
                 ++g_wm_dbg.input_count;
                 if (g_wm_dbg.input_pending_ms == 0u)
-                    g_wm_dbg.input_pending_ms = get_uptime_ms();
+                    g_wm_dbg.input_pending_ms = iter_ms;
             }
         }
+#if WM_DEBUG_TIMING
         {
             uint64_t now_phase_ms = get_uptime_ms();
             wm_dbg_acc(WM_DBG_INPUT, now_phase_ms - phase_ms);
             phase_ms = now_phase_ms;
         }
+#endif
 
         if (now_ms - last_display_poll_ms >= 250u) {
             last_display_poll_ms = now_ms;
@@ -444,23 +458,50 @@ void wm_service_main_loop(void)
                 did_work = true;
             }
         }
+#if WM_DEBUG_TIMING
         {
             uint64_t now_phase_ms = get_uptime_ms();
             wm_dbg_acc(WM_DBG_MISC, now_phase_ms - phase_ms);
             phase_ms = now_phase_ms;
         }
+#endif
 
         bool animating     = wm_animation_tick(&g_wm_state, now_ms);
         bool notifications = wm_notification_tick(&g_wm_state, now_ms);
 
         bool pending_frame = wm_compositor_has_pending_frame(&g_wm_state);
-        if (now_ms >= g_wm_state.compositor.next_frame_ms &&
+        /* The pointer bypasses the frame cadence below. Every other kind of
+         * damage is batched to a 60 Hz-ish cadence on purpose (repainting a
+         * window at 250 Hz is pure waste), but the cursor is what the user
+         * is looking at while it moves, and waiting out the cadence is what
+         * makes it trail the hand. Only when nothing *else* needs the frame
+         * does it take the fast path, so a moving pointer can never starve a
+         * real repaint. */
+        bool cursor_only = pending_frame && !animating && !notifications &&
+            wm_compositor_pending_is_cursor_only(&g_wm_state);
+        if ((cursor_only || now_ms >= g_wm_state.compositor.next_frame_ms) &&
             (animating || notifications || pending_frame)) {
             wm_compositor_render(&g_wm_state, now_ms);
-            g_wm_state.compositor.next_frame_ms = now_ms + WM_FRAME_INTERVAL_MS;
+            /* Fixed cadence: advance the previous deadline instead of
+             * scheduling from "now". Measuring from now lets every frame's
+             * lateness (a slow render, a long syscall, the scheduler) add to
+             * the next interval, so the effective period is really
+             * interval + jitter and it drifts out of step with the display
+             * underneath it. Catching up is rate-limited though: once a
+             * frame is more than a whole interval late, re-basing on now
+             * keeps the compositor from trying to "pay back" missed frames
+             * with a burst of back-to-back renders. */
+            uint64_t base_frame_ms = g_wm_state.compositor.next_frame_ms;
+            if (base_frame_ms == 0u ||
+                base_frame_ms + WM_FRAME_INTERVAL_MS < now_ms) {
+                base_frame_ms = now_ms;
+            }
+            g_wm_state.compositor.next_frame_ms =
+                base_frame_ms + WM_FRAME_INTERVAL_MS;
             wm_key_trace_frame();
             did_work = true;
             ++g_wm_dbg.render_count;
+#if WM_DEBUG_TIMING
             uint64_t flushed_ms = get_uptime_ms();
             wm_dbg_acc(WM_DBG_RENDER, flushed_ms - phase_ms);
             if (g_wm_dbg.input_pending_ms != 0u) {
@@ -469,6 +510,9 @@ void wm_service_main_loop(void)
                     g_wm_dbg.in2out_max_ms = in2out_ms;
                 g_wm_dbg.input_pending_ms = 0u;
             }
+#else
+            g_wm_dbg.input_pending_ms = 0u;
+#endif
         } else if (!animating && !notifications && !pending_frame) {
             if (g_wm_dbg.input_pending_ms != 0u &&
                 now_ms - g_wm_dbg.input_pending_ms > 100u)

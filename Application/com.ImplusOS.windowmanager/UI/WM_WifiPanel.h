@@ -39,6 +39,6 @@ bool wm_wifi_panel_input_backspace(wm_state_t *state);
 /* Called once per main-loop tick from WM_Main.c; internally rate-limits
  * itself (no-op most calls) so it's cheap to call unconditionally.
  * Refreshes status/scan-results while the panel is open, and clears
- * scan_active once the driver's scan window (see AX900.c) has elapsed.
+ * scan_active once the driver's scan window (see WM_WifiPanel.c) has elapsed.
  * Returns true if it changed anything the panel needs redrawn for. */
 bool wm_wifi_panel_poll(wm_state_t *state, uint64_t now_ms);

@@ -22,6 +22,9 @@ void wm_scene_set_system(wm_state_t *state, wm_window_t *window, bool system);
 wm_window_t *wm_scene_hit_test(wm_state_t *state, int32_t x, int32_t y,
                                wm_hit_zone_t *zone);
 wm_rect_t wm_window_visual_bounds(const wm_state_t *state, const wm_window_t *window);
+/* Damage only the window visual. Geometry, content and hover changes do not
+ * require repainting the taskbar's full-width dock. */
+void wm_window_mark_visual_damage(wm_state_t *state, const wm_window_t *window);
 void wm_window_mark_frame_damage(wm_state_t *state, const wm_window_t *window);
 void wm_window_damage_content(wm_state_t *state, wm_window_t *window, wm_rect_t rect);
 void wm_window_end_transaction(wm_state_t *state, wm_window_t *window);

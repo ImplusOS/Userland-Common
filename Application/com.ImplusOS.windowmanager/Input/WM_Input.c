@@ -348,7 +348,7 @@ static void update_hover(wm_state_t *state)
             window->hover_close    = close;
             window->hover_maximize = maximize;
             window->hover_minimize = minimize;
-            wm_window_mark_frame_damage(state, window);
+            wm_window_mark_visual_damage(state, window);
         }
     }
     if (!state->input.resizing) update_resize_cursor(state, zone);

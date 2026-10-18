@@ -55,10 +55,6 @@ bool wm_animation_tick(wm_state_t *state, uint64_t now_ms)
         wm_rect_t screen = {0, 0, state->compositor.framebuffer_width,
                             state->compositor.framebuffer_height};
         wm_region_add(&state->compositor.damage, merged, screen);
-        uint32_t dh = state->theme.dock_height + WM_DOCK_MARGIN * 2u;
-        wm_region_add(&state->compositor.damage,
-            (wm_rect_t){0, (int32_t)(state->compositor.framebuffer_height - dh),
-                        state->compositor.framebuffer_width, dh}, screen);
         if (progress < 1.0f) continue;
 
         wm_transition_t completed = window->transition;
@@ -74,6 +70,8 @@ bool wm_animation_tick(wm_state_t *state, uint64_t now_ms)
             window->visual_scale = 0.95f;
             if (completed == WM_TRANSITION_HIDE) window->visible = false;
             if (completed == WM_TRANSITION_MINIMIZE) window->minimized = true;
+            /* The dock changes only when the transition commits. */
+            wm_window_mark_frame_damage(state, window);
         }
     }
     return active;

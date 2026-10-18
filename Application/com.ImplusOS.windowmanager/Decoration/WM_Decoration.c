@@ -141,13 +141,33 @@ static bool build_shadow_cache(wm_window_t *window,
         uint32_t ry = shadow_size - layer / 2u;
         uint32_t rw = frame_w + layer * 2u;
         uint32_t rh = frame_h + layer * 2u;
-        uint32_t rr = radius + layer;
-        for (uint32_t y = 0; y < rh && ry+y < H; ++y)
-            for (uint32_t x = 0; x < rw && rx+x < W; ++x) {
-                if (!shadow_pixel_visible(x,y,rw,rh,rr)) continue;
-                uint8_t *px = &mask[(ry+y)*W + rx+x];
-                *px = (uint8_t)(alpha + ((uint32_t)*px*(255u-alpha)+127u)/255u);
+        uint32_t rr = wm_min_u32(radius + layer,
+                                 wm_min_u32(rw / 2u, rh / 2u));
+        uint32_t max_y = wm_min_u32(rh, H - ry);
+        uint32_t max_x = wm_min_u32(rw, W - rx);
+        for (uint32_t y = 0; y < max_y; ++y) {
+            uint8_t *row = &mask[(ry + y) * W + rx];
+            bool corner_row = y < rr || y >= rh - rr;
+            if (!corner_row) {
+                /* The interior of a rounded rectangle is contiguous. */
+                for (uint32_t x = 0; x < max_x; ++x)
+                    row[x] = (uint8_t)(alpha +
+                        ((uint32_t)row[x] * (255u - alpha) + 127u) / 255u);
+                continue;
             }
+            uint32_t center_start = wm_min_u32(rr, max_x);
+            uint32_t center_end = max_x > rr ? max_x - rr : 0u;
+            for (uint32_t x = 0; x < max_x; ++x) {
+                if (x >= center_start && x < center_end) {
+                    row[x] = (uint8_t)(alpha +
+                        ((uint32_t)row[x] * (255u - alpha) + 127u) / 255u);
+                    continue;
+                }
+                if (!shadow_pixel_visible(x, y, rw, rh, rr)) continue;
+                row[x] = (uint8_t)(alpha +
+                    ((uint32_t)row[x] * (255u - alpha) + 127u) / 255u);
+            }
+        }
     }
     window->shadow_mask              = mask;
     window->shadow_mask_width        = W;
@@ -169,7 +189,13 @@ static void draw_shadow(wm_state_t *state, wm_canvas_t *canvas,
                                      WM_DECOR_SHADOW_PERCENT);
     uint8_t theme_alpha = (uint8_t)(key_light >> 24u);
     int32_t offset_y = m3_shadow_offset_y(WM_DECOR_ELEVATION);
-    if (!build_shadow_cache(window, frame.w, frame.h,
+    /* A live resize changes the cache dimensions every pointer frame. Use the
+     * clipped direct shadow until the drag ends, then build one reusable mask
+     * for the final size. */
+    bool resizing = state->input.resizing &&
+        (window->shadow_cache_frame_width != frame.w ||
+         window->shadow_cache_frame_height != frame.h);
+    if (resizing || !build_shadow_cache(window, frame.w, frame.h,
                              state->theme.corner_radius, size, theme_alpha)) {
         wm_canvas_elevation_shadow(canvas, frame, state->theme.corner_radius,
                                    WM_DECOR_ELEVATION, key_light, opacity);
@@ -178,8 +204,23 @@ static void draw_shadow(wm_state_t *state, wm_canvas_t *canvas,
     uint32_t rgb = key_light & 0x00FFFFFFu;
     int32_t ox = frame.x - (int32_t)size;
     int32_t oy = frame.y - (int32_t)size + offset_y;
-    for (uint32_t y = 0; y < window->shadow_mask_height; ++y)
-        for (uint32_t x = 0; x < window->shadow_mask_width; ++x) {
+    /* The shadow cache is deliberately larger than the window.  On a small
+     * damage repaint (cursor movement, a title-bar hover, or a client update)
+     * walking that whole cache was wasted work: wm_canvas_put() would reject
+     * almost every pixel against the canvas clip anyway.  Restrict the cache
+     * traversal up front, while retaining wm_canvas_put() for the final
+     * framebuffer bounds/alpha handling. */
+    wm_rect_t shadow_bounds = {
+        ox, oy, window->shadow_mask_width, window->shadow_mask_height
+    };
+    wm_rect_t visible = wm_rect_intersection(shadow_bounds, canvas->clip);
+    if (visible.w == 0u || visible.h == 0u) return;
+    uint32_t start_x = (uint32_t)(visible.x - ox);
+    uint32_t start_y = (uint32_t)(visible.y - oy);
+    uint32_t end_x = start_x + visible.w;
+    uint32_t end_y = start_y + visible.h;
+    for (uint32_t y = start_y; y < end_y; ++y)
+        for (uint32_t x = start_x; x < end_x; ++x) {
             uint32_t ma = window->shadow_mask[y*window->shadow_mask_width+x];
             if (!ma) continue;
             uint32_t alpha = (ma*(uint32_t)opacity+127u)/255u;

@@ -332,7 +332,7 @@ static void draw_password_view(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t
     draw_text_button(state, canvas, cancel, "キャンセル", m3->primary);
 
     wm_font_draw(&state->font, canvas, body.x, body.y + 170,
-                 "WPA2 support is experimental on this driver -- see AX900.c.",
+                 "WPA2-PSK passwords are 8-63 characters; empty = open network.",
                  m3->on_surface_variant, type->label_small, body.w);
 }
 
@@ -455,7 +455,7 @@ bool wm_wifi_panel_input_backspace(wm_state_t *state)
 
 #define WIFI_STATUS_POLL_INTERVAL_MS  1000u
 #define WIFI_RESULTS_POLL_INTERVAL_MS 800u
-#define WIFI_SCAN_WINDOW_MS           3500u /* matches AX900.c's ~3s scan window, plus slack */
+#define WIFI_SCAN_WINDOW_MS           3500u /* driver scan window (AIC8800: 3s) + slack */
 
 bool wm_wifi_panel_poll(wm_state_t *state, uint64_t now_ms)
 {

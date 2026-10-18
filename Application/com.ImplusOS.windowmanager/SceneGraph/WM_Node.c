@@ -45,7 +45,7 @@ static void mark_content_damage_on_screen(wm_state_t *state,
     if (!clipped.w || !clipped.h) return;
 
     if (!window_can_use_partial_content_damage(window)) {
-        wm_window_mark_frame_damage(state, window);
+        wm_window_mark_visual_damage(state, window);
         return;
     }
 
@@ -141,11 +141,17 @@ wm_rect_t wm_window_visual_bounds(const wm_state_t *state, const wm_window_t *wi
     };
 }
 
-void wm_window_mark_frame_damage(wm_state_t *state, const wm_window_t *window)
+void wm_window_mark_visual_damage(wm_state_t *state, const wm_window_t *window)
 {
     if (!state || !window) return;
     wm_region_add(&state->compositor.damage, wm_window_visual_bounds(state, window),
                   screen_bounds(state));
+}
+
+void wm_window_mark_frame_damage(wm_state_t *state, const wm_window_t *window)
+{
+    if (!state || !window) return;
+    wm_window_mark_visual_damage(state, window);
     uint32_t dock_height = state->theme.dock_height + WM_DOCK_MARGIN * 2u;
     wm_region_add(&state->compositor.damage,
         (wm_rect_t){0, (int32_t)(state->compositor.framebuffer_height - dock_height),
@@ -367,13 +373,13 @@ bool wm_scene_set_frame(wm_state_t *state, wm_window_t *window, wm_rect_t frame)
 
     bool size_changed = frame.w != window->frame.w || frame.h != window->frame.h;
 
-    wm_window_mark_frame_damage(state, window);
+    wm_window_mark_visual_damage(state, window);
     if (size_changed && !allocate_surface(window, frame.w, frame.h, true))
         return false;
     window->frame = frame;
     wm_region_reset(&window->damage);
     wm_region_add_full(&window->damage);
-    wm_window_mark_frame_damage(state, window);
+    wm_window_mark_visual_damage(state, window);
     /* allocate_surface() replaced the shared-memory object the owner mapped:
      * its handle is closed and the surface the compositor now reads from is a
      * different one. A client that is not told keeps drawing into the buffer

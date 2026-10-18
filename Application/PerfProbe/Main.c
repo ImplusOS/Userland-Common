@@ -117,6 +117,38 @@ static uint32_t idle_permille(uint64_t idle_delta, uint64_t wall_delta,
     return (uint32_t)(((busy - idle_delta) * 1000u) / busy);
 }
 
+/*
+ * Boot phase timings, printed once before the first sample. The kernel
+ * records a duration for each phase of kernel_main (boot_profile_begin/end);
+ * serial is the only place they come out, and a boot-time change is only
+ * meaningful against them -- especially the IO phases, which run before any
+ * of the once-a-second numbers below exist.
+ */
+static void dump_boot_profile(void)
+{
+    int32_t count = get_boot_profile_count();
+    char line[128];
+
+    if (count <= 0) {
+        serial_write_string("[probe] boot profile unavailable\n");
+        return;
+    }
+
+    for (int32_t i = 0; i < count; ++i) {
+        boot_profile_entry_t entry;
+        uint64_t us;
+        if (get_boot_profile_entry(i, &entry) != 0) {
+            continue;
+        }
+        us = entry.duration_ns / 1000ULL;
+        snprintf(line, sizeof(line), "[probe] phase %s %llu.%03llums\n",
+                 entry.name,
+                 (unsigned long long)(us / 1000ULL),
+                 (unsigned long long)(us % 1000ULL));
+        serial_write_string(line);
+    }
+}
+
 static void emit_summary(uint32_t busy_permille, uint64_t used_bytes,
                          uint64_t total_bytes, uint64_t heap_bytes,
                          uint32_t pids)
@@ -269,6 +301,7 @@ static void round_once(uint32_t detail)
 void _start(void)
 {
     serial_write_string("[probe] start\n");
+    dump_boot_profile();
     memset(&g_cpu_prev, 0, sizeof(g_cpu_prev));
     g_wall_prev_ns = 0;
     g_prev_count = 0;

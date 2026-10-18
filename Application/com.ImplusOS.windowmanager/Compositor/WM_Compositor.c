@@ -161,6 +161,20 @@ bool wm_compositor_has_pending_frame(const wm_state_t *state)
            c->previous_cursor_style   != state->scene.cursor_style;
 }
 
+bool wm_compositor_pending_is_cursor_only(const wm_state_t *state)
+{
+    if (!state) return false;
+    const wm_compositor_t *c = &state->compositor;
+    /* Any queued damage means something other than the pointer needs the
+     * frame (a window repaint, a hover highlight, the clock), and that is
+     * exactly what the cadence is there to batch. */
+    if (!wm_region_is_empty(&c->damage)) return false;
+    return c->previous_cursor_visible != state->scene.cursor_visible ||
+           c->previous_cursor_x       != state->scene.cursor_x       ||
+           c->previous_cursor_y       != state->scene.cursor_y       ||
+           c->previous_cursor_style   != state->scene.cursor_style;
+}
+
 static void copy_background(wm_state_t *state, wm_rect_t rect)
 {
     uint32_t width = state->compositor.framebuffer_width;
@@ -172,10 +186,62 @@ static void copy_background(wm_state_t *state, wm_rect_t rect)
     }
 }
 
+static bool rect_contains_rect(wm_rect_t outer, wm_rect_t inner)
+{
+    return inner.w != 0u && inner.h != 0u &&
+           inner.x >= outer.x && inner.y >= outer.y &&
+           (int64_t)inner.x + inner.w <= (int64_t)outer.x + outer.w &&
+           (int64_t)inner.y + inner.h <= (int64_t)outer.y + outer.h;
+}
+
+/* Find the topmost opaque window that completely covers this damage clip.
+ * Anything below it is invisible, but used to be fully rasterized before
+ * the covering window was painted.  This matters especially for a maximized
+ * client: a damage rectangle in that client otherwise walks every desktop
+ * and background window first. */
+static wm_window_t *opaque_clip_anchor(wm_state_t *state, wm_rect_t clip,
+                                       wm_layer_t *anchor_layer)
+{
+    if (!state || !anchor_layer) return NULL;
+    for (int layer = (int)WM_LAYER_OVERLAY;
+         layer >= (int)WM_LAYER_NORMAL; --layer) {
+        for (wm_window_t *w = state->scene.layer_top[layer]; w;
+             w = w->z_next) {
+            if (!w->visible || w->minimized || w->close_requested ||
+                !w->surface_opaque || w->visual_alpha < 0.999f ||
+                w->visual_scale < 0.999f || w->visual_scale > 1.001f)
+                continue;
+            /* visual_bounds() includes the drop shadow margin.  The shadow
+             * is translucent, so it cannot by itself hide lower windows;
+             * use only the actually opaque frame as the occlusion source. */
+            wm_rect_t bounds = {
+                w->frame.x,
+                w->frame.y,
+                w->frame.w,
+                w->frame.h + (w->is_system ? 0u : state->theme.title_height)
+            };
+            if (rect_contains_rect(bounds, clip)) {
+                *anchor_layer = (wm_layer_t)layer;
+                return w;
+            }
+        }
+    }
+    return NULL;
+}
+
 static void draw_scene(wm_state_t *state, wm_canvas_t *canvas)
 {
+    wm_layer_t anchor_layer = WM_LAYER_DESKTOP;
+    wm_window_t *anchor = opaque_clip_anchor(state, canvas->clip,
+                                             &anchor_layer);
+    bool reached_anchor = anchor == NULL;
     for (uint32_t layer = WM_LAYER_NORMAL; layer <= WM_LAYER_OVERLAY; ++layer) {
         for (wm_window_t *w = state->scene.layer_bottom[layer]; w; w = w->z_prev) {
+            if (!reached_anchor) {
+                if (layer != (uint32_t)anchor_layer || w != anchor)
+                    continue;
+                reached_anchor = true;
+            }
             if (!w->visible || w->minimized || w->visual_alpha <= 0.0f)
                 continue;
             if (!wm_rect_intersects(wm_window_visual_bounds(state, w),
