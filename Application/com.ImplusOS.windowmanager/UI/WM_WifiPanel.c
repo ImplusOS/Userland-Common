@@ -123,7 +123,12 @@ static const char *status_line(const wm_state_t *state, char *buf, size_t buf_le
         case WIFI_STATE_NO_ADAPTER:      return "No Wi-Fi adapter detected";
         case WIFI_STATE_ADAPTER_ATTACHED:
         case WIFI_STATE_FIRMWARE_LOADING: return "Starting adapter...";
-        case WIFI_STATE_FIRMWARE_FAILED: return "Adapter firmware failed to load";
+        case WIFI_STATE_FIRMWARE_FAILED:
+            if (p->status.detail[0] != '\0') {
+                snprintf(buf, buf_len, "Firmware failed: %s", p->status.detail);
+                return buf;
+            }
+            return "Adapter firmware failed to load";
         case WIFI_STATE_SCANNING:        return "Scanning for networks...";
         case WIFI_STATE_CONNECTING:
             snprintf(buf, buf_len, "Connecting to %s...", p->status.ssid);
@@ -332,7 +337,7 @@ static void draw_password_view(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t
     draw_text_button(state, canvas, cancel, "キャンセル", m3->primary);
 
     wm_font_draw(&state->font, canvas, body.x, body.y + 170,
-                 "WPA2-PSK passwords are 8-63 characters; empty = open network.",
+                 "WPA2-PSK passwords are 8-63 characters.",
                  m3->on_surface_variant, type->label_small, body.w);
 }
 
