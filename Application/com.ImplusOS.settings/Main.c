@@ -1,14 +1,12 @@
 /*
  * ImplusOS settings.
  *
- * Five panes down the left, their contents on the right. The one that
- * changes anything is Appearance: it picks the Material Design 3 seed
- * colour and the light/dark variant the whole desktop is generated from,
- * writes that to the shell's theme file, and tells the window manager to
- * rebuild its scheme from it so the change is visible without a restart.
+ * Six panes down the left, their contents on the right. Appearance changes
+ * the desktop theme; Display lists the modes reported by each monitor and
+ * applies a selected mode through the display-mode system calls.
  *
- * The rest read the system back: what it is running on, how long boot took
- * phase by phase, what is attached, and what storage it has.
+ * The remaining panes read the system back: what it is running on, how long
+ * boot took phase by phase, what is attached, and what storage it has.
  */
 
 #include "ImUI.h"
@@ -16,6 +14,7 @@
 #include "Process.h"
 #include "Serial.h"
 #include "SystemInfo.h"
+#include "Graphics.h"
 #include "Time.h"
 #include "Window.h"
 
@@ -31,6 +30,7 @@
 
 typedef enum {
     PANE_APPEARANCE = 0,
+    PANE_DISPLAY,
     PANE_SYSTEM,
     PANE_BOOT,
     PANE_DEVICES,
@@ -39,14 +39,14 @@ typedef enum {
 } pane_t;
 
 static const char *const k_pane_name[PANE_COUNT] = {
-    "外観", "システム", "起動", "デバイス", "ストレージ",
+    "外観", "ディスプレイ", "システム", "起動", "デバイス", "ストレージ",
 };
 static const char *const k_pane_note[PANE_COUNT] = {
-    "配色とテーマ", "CPU・メモリ・画面", "起動の各フェーズの計測",
-    "接続されている機器", "ディスクと容量",
+    "配色とテーマ", "解像度とリフレッシュレート", "CPU・メモリ・画面",
+    "起動の各フェーズの計測", "接続されている機器", "ディスクと容量",
 };
 static const imui_icon_t k_pane_icon[PANE_COUNT] = {
-    IMUI_ICON_EDIT, IMUI_ICON_HOME, IMUI_ICON_REFRESH,
+    IMUI_ICON_EDIT, IMUI_ICON_NONE, IMUI_ICON_HOME, IMUI_ICON_REFRESH,
     IMUI_ICON_DRIVE, IMUI_ICON_FILE,
 };
 
@@ -79,6 +79,18 @@ static imui_widget_t *w_status;
 static pane_t         g_pane = PANE_APPEARANCE;
 static uint32_t       g_seed = M3_SEED_BASELINE;
 static bool           g_dark;
+
+#define DISPLAY_SETTINGS_MAX_MODES 16u
+#define DISPLAY_SETTINGS_MAX_ACTIONS (DISPLAY_MAX_MONITORS * (DISPLAY_SETTINGS_MAX_MODES + 1u))
+
+typedef struct {
+    uint32_t monitor_index;
+    uint32_t mode_index;
+    bool     selectable;
+} display_action_t;
+
+static display_action_t g_display_actions[DISPLAY_SETTINGS_MAX_ACTIONS];
+static uint32_t         g_display_action_count;
 
 /* CPU share is a rate, and the kernel reports cumulative idle time per
  * core, so the pane needs two samples to show one number. */
@@ -266,6 +278,101 @@ static void fill_date_time(char *value, size_t cap)
              (unsigned)rtc.hour, (unsigned)rtc.minute, (unsigned)rtc.second);
 }
 
+static void fill_display(void)
+{
+    display_topology_t topology;
+    memset(&topology, 0, sizeof(topology));
+    g_display_action_count = 0u;
+
+    if (display_get_topology(&topology) < 0 ||
+        topology.monitor_count == 0u) {
+        imui_list_add(w_content, IMUI_ICON_NONE,
+                      "ディスプレイ情報を取得できません", "");
+        return;
+    }
+
+    uint32_t monitor_count = topology.monitor_count;
+    if (monitor_count > DISPLAY_MAX_MONITORS)
+        monitor_count = DISPLAY_MAX_MONITORS;
+
+    for (uint32_t monitor_index = 0u;
+         monitor_index < monitor_count; ++monitor_index) {
+        display_monitor_info_t monitor;
+        memset(&monitor, 0, sizeof(monitor));
+        if (display_get_monitor_info(monitor_index, &monitor) < 0)
+            continue;
+
+        char heading[128];
+        snprintf(heading, sizeof(heading), "%s  ·  %ux%u",
+                 monitor.name[0] ? monitor.name : "ディスプレイ",
+                 monitor.width, monitor.height);
+        imui_list_add(w_content, IMUI_ICON_NONE, heading,
+                      (monitor.flags & DISPLAY_MONITOR_FLAG_MODESET)
+                          ? "モードを選択して適用できます"
+                          : "この出力はモード変更に対応していません");
+
+        if (g_display_action_count < DISPLAY_SETTINGS_MAX_ACTIONS) {
+            display_action_t *action =
+                &g_display_actions[g_display_action_count++];
+            action->monitor_index = monitor_index;
+            action->mode_index = 0u;
+            action->selectable = false;
+        }
+
+        uint32_t mode_count = monitor.mode_count;
+        if (mode_count > DISPLAY_SETTINGS_MAX_MODES)
+            mode_count = DISPLAY_SETTINGS_MAX_MODES;
+        for (uint32_t mode_index = 0u; mode_index < mode_count; ++mode_index) {
+            display_mode_info_t mode;
+            memset(&mode, 0, sizeof(mode));
+            if (display_get_monitor_mode_info(monitor_index, mode_index,
+                                              &mode) < 0)
+                continue;
+
+            bool current = (mode.flags & DISPLAY_MODE_FLAG_CURRENT) != 0u;
+            bool can_apply = (monitor.flags & DISPLAY_MONITOR_FLAG_MODESET) != 0u;
+            char label[96];
+            char detail[160];
+            snprintf(label, sizeof(label), "%u × %u%s",
+                     mode.width, mode.height, current ? "  ·  使用中" : "");
+            if (mode.refresh_millihz != 0u) {
+                snprintf(detail, sizeof(detail), "%s  ·  %u.%u Hz  ·  %u bpp%s",
+                         mode.name[0] ? mode.name : "表示モード",
+                         mode.refresh_millihz / 1000u,
+                         (mode.refresh_millihz % 1000u) / 100u,
+                         mode.bits_per_pixel,
+                         (mode.flags & DISPLAY_MODE_FLAG_PREFERRED)
+                             ? "  ·  推奨" : "");
+            } else {
+                snprintf(detail, sizeof(detail), "%s  ·  %u bpp",
+                         mode.name[0] ? mode.name : "表示モード",
+                         mode.bits_per_pixel);
+            }
+            if (!can_apply && !current) {
+                size_t used = strlen(detail);
+                if (used < sizeof(detail))
+                    snprintf(detail + used, sizeof(detail) - used,
+                             "  ·  変更非対応");
+            }
+
+            imui_list_add(w_content,
+                          current ? IMUI_ICON_CHECK : IMUI_ICON_NONE,
+                          label, detail);
+            if (g_display_action_count < DISPLAY_SETTINGS_MAX_ACTIONS) {
+                display_action_t *action =
+                    &g_display_actions[g_display_action_count++];
+                action->monitor_index = monitor_index;
+                action->mode_index = mode_index;
+                action->selectable = can_apply && !current;
+            }
+        }
+    }
+
+    if (g_display_action_count == 0u)
+        imui_list_add(w_content, IMUI_ICON_NONE,
+                      "利用できる表示モードがありません", "");
+}
+
 static void fill_system(void)
 {
     char value[160];
@@ -427,6 +534,7 @@ static void show_pane(pane_t pane)
     imui_set_text(g_app, w_title, k_pane_name[pane]);
     switch (pane) {
     case PANE_APPEARANCE: fill_appearance(); break;
+    case PANE_DISPLAY:    fill_display();    break;
     case PANE_SYSTEM:     fill_system();     break;
     case PANE_BOOT:       fill_boot();       break;
     case PANE_DEVICES:    fill_devices();    break;
@@ -494,9 +602,25 @@ static void on_nav(imui_app_t *app, imui_widget_t *w, void *user)
 static void on_content(imui_app_t *app, imui_widget_t *w, void *user)
 {
     (void)app; (void)user;
-    if (g_pane != PANE_APPEARANCE) return;
     int row = imui_list_selected(w);
-    if (row <= 0) return;
+    if (row < 0) return;
+
+    if (g_pane == PANE_DISPLAY) {
+        if ((uint32_t)row >= g_display_action_count) return;
+        const display_action_t action = g_display_actions[(uint32_t)row];
+        if (!action.selectable) return;
+
+        if (display_set_monitor_mode(action.monitor_index,
+                                     action.mode_index) >= 0) {
+            show_pane(PANE_DISPLAY);
+            status("ディスプレイモードを変更しました。");
+        } else {
+            status("ディスプレイモードを変更できませんでした。");
+        }
+        return;
+    }
+
+    if (g_pane != PANE_APPEARANCE || row <= 0) return;
 
     uint32_t seed_row = (uint32_t)row - 1u;      /* row 0 is the heading */
     if (seed_row < SEED_COUNT) {
