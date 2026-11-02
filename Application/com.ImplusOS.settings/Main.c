@@ -86,6 +86,9 @@ static bool           g_dark;
 typedef struct {
     uint32_t monitor_index;
     uint32_t mode_index;
+    uint32_t generation;
+    uint32_t width;
+    uint32_t height;
     bool     selectable;
 } display_action_t;
 
@@ -295,6 +298,7 @@ static void fill_display(void)
     if (monitor_count > DISPLAY_MAX_MONITORS)
         monitor_count = DISPLAY_MAX_MONITORS;
 
+    uint32_t displayed_modes = 0u;
     for (uint32_t monitor_index = 0u;
          monitor_index < monitor_count; ++monitor_index) {
         display_monitor_info_t monitor;
@@ -316,6 +320,9 @@ static void fill_display(void)
                 &g_display_actions[g_display_action_count++];
             action->monitor_index = monitor_index;
             action->mode_index = 0u;
+            action->generation = monitor.generation;
+            action->width = 0u;
+            action->height = 0u;
             action->selectable = false;
         }
 
@@ -358,17 +365,21 @@ static void fill_display(void)
             imui_list_add(w_content,
                           current ? IMUI_ICON_CHECK : IMUI_ICON_NONE,
                           label, detail);
+            ++displayed_modes;
             if (g_display_action_count < DISPLAY_SETTINGS_MAX_ACTIONS) {
                 display_action_t *action =
                     &g_display_actions[g_display_action_count++];
                 action->monitor_index = monitor_index;
                 action->mode_index = mode_index;
+                action->generation = monitor.generation;
+                action->width = mode.width;
+                action->height = mode.height;
                 action->selectable = can_apply && !current;
             }
         }
     }
 
-    if (g_display_action_count == 0u)
+    if (displayed_modes == 0u)
         imui_list_add(w_content, IMUI_ICON_NONE,
                       "利用できる表示モードがありません", "");
 }
@@ -609,6 +620,24 @@ static void on_content(imui_app_t *app, imui_widget_t *w, void *user)
         if ((uint32_t)row >= g_display_action_count) return;
         const display_action_t action = g_display_actions[(uint32_t)row];
         if (!action.selectable) return;
+
+        /* A hotplug or another settings client may have changed the mode
+         * table after this pane was filled. Never apply a stale mode index. */
+        display_monitor_info_t monitor_now;
+        display_mode_info_t mode_now;
+        memset(&monitor_now, 0, sizeof(monitor_now));
+        memset(&mode_now, 0, sizeof(mode_now));
+        if (display_get_monitor_info(action.monitor_index, &monitor_now) < 0 ||
+            monitor_now.generation != action.generation ||
+            (monitor_now.flags & DISPLAY_MONITOR_FLAG_MODESET) == 0u ||
+            display_get_monitor_mode_info(action.monitor_index,
+                                          action.mode_index, &mode_now) < 0 ||
+            mode_now.width != action.width ||
+            mode_now.height != action.height) {
+            show_pane(PANE_DISPLAY);
+            status("ディスプレイ構成が更新されました。モードを選び直してください。");
+            return;
+        }
 
         if (display_set_monitor_mode(action.monitor_index,
                                      action.mode_index) >= 0) {
