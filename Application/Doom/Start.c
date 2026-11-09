@@ -10,9 +10,10 @@
  *
  * linuxxdoom-x86_64 is an unmodified Linux ELF that runs as an X11 + GLX
  * client. ImplusOS has no X server, so Debian's unmodified Xorg (modesetting
- * DDX, Mesa llvmpipe) is brought up first and scans out through the kernel's
- * KMS shim; Doom then starts as an ordinary GLX client. Xorg, Mesa, xkb, the
- * fonts and xorg.conf are all staged into the image by Vendor/LinuxRuntime.
+ * DDX, glamor over Mesa) is brought up first and scans out through the
+ * kernel's KMS shim; Doom then starts as an ordinary GLX client. Xorg, Mesa,
+ * xkb, the fonts and xorg.conf are all staged into the image by
+ * Vendor/LinuxRuntime.
  *
  * Bringing the server up -- and hosting it in a window so it does not fight
  * the compositor for the panel -- is Userland/API/Source/XSession.c, shared
@@ -22,9 +23,10 @@
  * Environment variables are this launcher's business, not the kernel's:
  * linux_env_add_doom() below names the IWAD/soundfont and the null audio
  * backends, and xsession_run_env() adds the DISPLAY=:0, XKB_CONFIG_ROOT and
- * LIBGL_ALWAYS_SOFTWARE/GALLIUM_DRIVER=llvmpipe every X client on this
- * display needs (Userland/API/Source/LinuxEnv.c). The kernel only supplies
- * the generic defaults (PATH, HOME, locale, XDG_*).
+ * Mesa configuration every X client on this display needs
+ * (Userland/API/Source/LinuxEnv.c): virgl when the kernel exposes a 3D render
+ * node, llvmpipe otherwise. The kernel only supplies the generic defaults
+ * (PATH, HOME, locale, XDG_*).
  */
 #include "LinuxEnv.h"
 

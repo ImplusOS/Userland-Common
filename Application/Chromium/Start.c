@@ -4,6 +4,7 @@
 #include "File.h"
 #include "Process.h"
 #include "Serial.h"
+#include "SystemInfo.h"
 #include "XSession.h"
 
 /*
@@ -55,16 +56,20 @@
  *                           HOME=/tmp is tmpfs-backed and writable; naming
  *                           the profile dir explicitly avoids depending on
  *                           Chromium's default (~/.config/chromium).
- *   --ignore-gpu-blocklist  turn the GPU process's work on. The GL driver
- *                           here is Mesa (llvmpipe under QEMU, which has no
- *                           GPU of its own), and Chromium's software
- *                           rendering list disables every GPU feature for it:
- *                           compositing, rasterization, canvas, WebGL, WebGPU
- *                           and video decode all fell back to the browser's
- *                           software paths. With it they run in the GPU
- *                           process through ANGLE/Mesa (chrome://gpu reports
- *                           them "Hardware accelerated"); on real hardware
- *                           with a Mesa driver it is the actual GPU.
+ *   --ignore-gpu-blocklist  turn the GPU process's work on -- but only when
+ *                           the kernel reports a real 3D render node (virgl).
+ *                           Chromium's software rendering list disables every
+ *                           GPU feature for a software renderer: compositing,
+ *                           rasterization, canvas, WebGL, WebGPU and video
+ *                           decode all fall back to the browser's software
+ *                           paths. With it they run in the GPU process through
+ *                           ANGLE/Mesa. On llvmpipe that is a pessimisation,
+ *                           not an optimisation: ANGLE-on-llvmpipe plus the
+ *                           GLX/DRI3 presentation path measured ~5 fps on a
+ *                           854x480 YouTube page, against ~30 fps for the
+ *                           plain software compositor (Skia CPU + X11 output).
+ *                           So the switch is added only for a real GPU; see
+ *                           build_args().
  *
  * Chromium runs as uid/gid 1000 (CHROME_UID below): it refuses to start its
  * sandbox as root. The X server it connects to keeps running as root.
@@ -120,6 +125,17 @@ static uint32_t cstrlen(const char *s)
 static const char *build_args(void)
 {
     uint32_t at = append(0, CHROME_BASE_ARGS " ", cstrlen(CHROME_BASE_ARGS " "));
+
+    /* GPU features only pay off on a real render node. With llvmpipe the
+     * browser's own software compositor is faster (see the comment above),
+     * so leave Chromium's software rendering list in effect there. */
+    system_graphics_info_t graphics = {0};
+    if (os_get_graphics_info(&graphics) >= 0 &&
+        (graphics.acceleration_flags & SYSTEM_GRAPHICS_ACCEL_3D) != 0u) {
+        at = append(at, "--ignore-gpu-blocklist ",
+                    cstrlen("--ignore-gpu-blocklist "));
+    }
+
     char extra[400];
     int64_t got = -1;
     int32_t fd = file_open(CHROME_LAUNCH_ARGS_FILE, 0);
