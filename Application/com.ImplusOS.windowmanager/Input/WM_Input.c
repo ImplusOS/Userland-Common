@@ -98,8 +98,17 @@ static void perform_wifi_action(wm_state_t *state, wm_wifi_action_t action);
 static void route_keyboard(wm_state_t *state, const ipc_message_t *message)
 {
     wm_window_t *window = wm_scene_find(&state->scene, state->scene.focused_id);
-    if (window && window->owner_pid > 0 && !window->close_requested)
-        ipc_send_message(window->owner_pid, message->data, message->size);
+    if (!window || window->owner_pid <= 0 || window->close_requested) return;
+    /* Name the window the key was typed into: a client with several windows
+     * (XSession hosts one per X top-level) routes on it. */
+    struct {
+        wm_msg_header_t header;
+        input_keyboard_event_t event;
+    } outgoing;
+    if (message->size < sizeof(outgoing)) return;
+    memcpy(&outgoing, message->data, sizeof(outgoing));
+    outgoing.header.window_id = window->id;
+    ipc_send_message(window->owner_pid, &outgoing, sizeof(outgoing));
 }
 
 static uint16_t clamp_u16(int32_t value)
@@ -879,15 +888,40 @@ bool wm_input_poll_raw_mouse(wm_state_t *state)
     int32_t dx = 0;
     int32_t dy = 0;
     uint32_t count = 0u;
+    bool have_abs = false;
+    int32_t abs_x = 0;
+    int32_t abs_y = 0;
     while (input_read_mouse(&raw) > 0) {
-        dx += (int16_t)raw.x;
-        dy += (int16_t)raw.y;
+        if ((raw.flags & INPUT_MOUSE_FLAG_ABSOLUTE) != 0u) {
+            /* A tablet reports where the pointer is, not how far it moved:
+             * the latest position wins and earlier deltas are moot. */
+            uint32_t w = state->compositor.framebuffer_width;
+            uint32_t h = state->compositor.framebuffer_height;
+            abs_x = (int32_t)(((uint64_t)raw.x * (w > 0u ? w - 1u : 0u)) /
+                              INPUT_MOUSE_ABS_MAX);
+            abs_y = (int32_t)(((uint64_t)raw.y * (h > 0u ? h - 1u : 0u)) /
+                              INPUT_MOUSE_ABS_MAX);
+            have_abs = true;
+            dx = 0;
+            dy = 0;
+        } else {
+            dx += (int16_t)raw.x;
+            dy += (int16_t)raw.y;
+        }
         accum.buttons = raw.buttons;
         accum.wheel   = raw.wheel;
         ++count;
     }
     if (count == 0u) return false;
 
+    if (have_abs) {
+        int32_t x = abs_x + dx;
+        int32_t y = abs_y + dy;
+        handle_mouse_event(state, &accum, true,
+                           (uint32_t)(x < 0 ? 0 : x),
+                           (uint32_t)(y < 0 ? 0 : y), 0u);
+        return true;
+    }
     accum.x = (uint16_t)(int16_t)clamp_delta(dx);
     accum.y = (uint16_t)(int16_t)clamp_delta(dy);
     handle_mouse_event(state, &accum, false, 0u, 0u, 0u);

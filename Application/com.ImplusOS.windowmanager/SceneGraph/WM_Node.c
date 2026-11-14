@@ -315,6 +315,9 @@ void wm_scene_destroy_immediate(wm_state_t *state, uint32_t id)
     }
     if (state->scene.focused_id == id) state->scene.focused_id = 0u;
     int32_t owner_pid = window->owner_pid;
+    /* An owner that hosts other programs' windows outlives any one of them:
+     * it has its own cleanup to do (the X server behind them, say). */
+    bool spare_owner = window->owner_handles_close;
     if (window->owner_pid > 0) {
         wm_msg_header_t destroyed = {
             .type = WM_WINDOW_DESTROYED,
@@ -335,7 +338,7 @@ void wm_scene_destroy_immediate(wm_state_t *state, uint32_t id)
     free(window);
     if (state->scene.focused_id == 0u) wm_scene_focus_next(state, id);
 
-    if (owner_pid > 0 && owner_pid != process_get_current_pid()) {
+    if (owner_pid > 0 && owner_pid != process_get_current_pid() && !spare_owner) {
         bool has_other = false;
         for (uint32_t i = 1u; i <= WM_MAX_WINDOWS; ++i) {
             if (state->scene.id_table[i] && state->scene.id_table[i]->owner_pid == owner_pid) {
@@ -353,6 +356,19 @@ void wm_scene_destroy_window(wm_state_t *state, uint32_t id)
 {
     wm_window_t *window = wm_scene_find(&state->scene, id);
     if (!window || window->close_requested) return;
+    if (window->owner_handles_close && !window->owner_destroying &&
+        window->owner_pid > 0) {
+        /* The owner decides: it may ask the program inside to close, which
+         * may in turn ask the user whether to save. It destroys the window
+         * itself once that has happened. */
+        wm_msg_header_t request = {
+            .type = WM_CLOSE_REQUESTED,
+            .request_id = 0u,
+            .window_id = id,
+        };
+        ipc_send_message(window->owner_pid, &request, sizeof(request));
+        return;
+    }
     window->close_requested = true;
     if (state->scene.focused_id == id) wm_scene_focus_next(state, id);
     wm_animation_start(state, window, WM_TRANSITION_CLOSE, M3_DURATION_SHORT_4);

@@ -15,6 +15,10 @@
 #define WINE_DEFAULT_ARGS "winecfg.exe"
 #define WINE_LOADER_PATH "/usr/lib/wine/wine64"
 #define WINE_ARGS_FILE "/Userland/Wine/Resource/launch.args"
+/* Exit status of wine64 when it ran without a usable prefix ("could not
+ * load kernel32.dll"), and how many times to wait for wineboot again. */
+#define WINE_STATUS_PREFIX_NOT_READY 53
+#define WINE_PREFIX_RETRIES 4u
 
 static uint32_t text_length(const char *text)
 {
@@ -40,6 +44,14 @@ static const char *wine_args(void)
 {
     static char args[512];
     char file_args[sizeof(args) - 1u];
+    /* A desktop entry may name the Windows program after the launcher's
+     * path ("Exec=/Userland/Wine/Wine.ELF explorer.exe"); that wins over
+     * the image-wide launch.args file, so several Start-menu rows can share
+     * this launcher. */
+    if (process_get_launch_argument(file_args, (uint32_t)sizeof(file_args)) >= 0) {
+        copy_args(args, (uint32_t)sizeof(args), file_args, text_length(file_args));
+        if (args[0] != '\0') return args;
+    }
     int32_t fd = file_open(WINE_ARGS_FILE, 0);
     if (fd >= 0) {
         int64_t got = file_read(fd, file_args, sizeof(file_args));
@@ -78,6 +90,19 @@ void _start(void)
      * wrapper or its external basename/cut helpers. */
     int32_t status = xsession_run_env(&session, WINE_LOADER_PATH, args,
                                       linux_env_entries(&env));
+    /* The first start in a fresh prefix runs wineboot to build it, and
+     * Wine's initial process gives that only five minutes before carrying on
+     * without a prefix -- it then exits with "could not load kernel32.dll"
+     * (status 53) while wineboot keeps working in the background. Copying
+     * the ~700 MB of builtin DLLs into the tmpfs prefix can take longer than
+     * that here. Starting again simply waits on the same wineboot (its
+     * __wineboot_event) and then runs the program in the finished prefix. */
+    for (uint32_t retry = 0u; status == WINE_STATUS_PREFIX_NOT_READY &&
+                              retry < WINE_PREFIX_RETRIES; ++retry) {
+        serial_write_string("[wine] prefix still being built; starting again\n");
+        status = xsession_run_env(&session, WINE_LOADER_PATH, args,
+                                  linux_env_entries(&env));
+    }
     if (status < 0) serial_write_string("[wine] could not start wine\n");
     xsession_close(&session);
     process_exit(status < 0 ? 1 : status);

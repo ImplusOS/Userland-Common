@@ -1,6 +1,7 @@
 #include "WM_Compositor.h"
 
 #include "WM_Damage.h"
+#include "WM_Gpu.h"
 #include "WM_Raster.h"
 #include "../Decoration/WM_Decoration.h"
 #include "../SceneGraph/WM_Node.h"
@@ -55,6 +56,10 @@ bool wm_compositor_init(wm_state_t *state, uint32_t width, uint32_t height)
     c->mapped_framebuffer = (uint32_t *)sys_get_display_framebuffer();
     c->buffer_bytes       = (uint32_t)bytes64;
     wm_region_reset(&c->damage);
+    /* Composite on the host GPU when the VirtIO-GPU 3D backend is there;
+     * otherwise -- and whenever that path fails -- this file's CPU
+     * compositor does the work. */
+    (void)wm_gpu_init(state);
     return true;
 }
 
@@ -93,12 +98,14 @@ bool wm_compositor_resize(wm_state_t *state, uint32_t width, uint32_t height)
     c->previous_cursor_visible = false;
     c->previous_cursor_style = WM_CURSOR_DEFAULT;
     wm_region_reset(&c->damage);
+    wm_gpu_resize(state);
     return true;
 }
 
 void wm_compositor_destroy(wm_compositor_t *compositor)
 {
     if (!compositor) return;
+    wm_gpu_shutdown();
     free(compositor->shadow);
     free(compositor->background);
     compositor->mapped_framebuffer = NULL;
@@ -108,6 +115,7 @@ void wm_compositor_destroy(wm_compositor_t *compositor)
 void wm_compositor_generate_background(wm_state_t *state)
 {
     if (!state || !state->compositor.background) return;
+    wm_gpu_background_changed();
     wm_canvas_t canvas;
     wm_canvas_init(&canvas, state->compositor.background,
                    state->compositor.framebuffer_width,
@@ -430,6 +438,18 @@ void wm_compositor_render(wm_state_t *state, uint64_t now_ms)
     uint32_t rect_count = damage.full ? 1u : damage.count;
     if (damage.full) rects[0] = full;
     else memcpy(rects, damage.rects, sizeof(wm_rect_t)*rect_count);
+
+    if (wm_gpu_active()) {
+        if (wm_gpu_render(state, rects, rect_count, damage.full, now_ms)) {
+            remember_cursor_state(state);
+            return;
+        }
+        /* The GPU path gave up and handed the scanout back; the desktop
+         * framebuffer it now shows is stale, so repaint all of it. */
+        damage.full = true;
+        rects[0] = full;
+        rect_count = 1u;
+    }
 
     /* Phase 1: Render scene content into shadow buffer */
     for (uint32_t i = 0; i < rect_count; ++i) {

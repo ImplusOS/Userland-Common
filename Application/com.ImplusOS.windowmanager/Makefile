@@ -66,7 +66,11 @@ test:
 		Tests/WM_DesktopEntryTest.c Linux/WM_DesktopEntry.c
 	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/MaterialTest \
 		Tests/MaterialTest.c ../../API/Source/Material.c
+	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/WM_VirglTest \
+		Tests/WM_VirglTest.c Compositor/WM_Virgl.c Compositor/WM_Raster.c \
+		Compositor/WM_Damage.c ../../API/Source/Material.c
 	@$(TEST_DIR)/WM_CoreTest
+	@$(TEST_DIR)/WM_VirglTest
 	@$(TEST_DIR)/WM_DesktopEntryTest
 	@$(TEST_DIR)/MaterialTest
 

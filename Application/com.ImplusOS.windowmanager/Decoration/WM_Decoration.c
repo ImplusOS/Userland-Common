@@ -345,7 +345,12 @@ void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
         frame.w>2u?frame.w-2u:frame.w,
         frame.h>title_h+2u?frame.h-title_h-2u:0u
     };
+    /* Damage inside the client area only needs the client's pixels -- unless
+     * they are translucent and this is a GPU layer, whose texture was just
+     * cleared: then the window body has to be under them, or the desktop
+     * would show through the client. */
     if (is_unscaled(window) && opacity == 255u &&
+        (window->surface_opaque || !state->compositor.layer_render) &&
         rect_contains_rect(content, visual_clip)) {
         wm_canvas_blit(canvas, content, window->surface,
                        window->frame.w, window->frame.h, 0u, 0u,

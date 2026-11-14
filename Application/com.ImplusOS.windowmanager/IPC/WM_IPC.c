@@ -347,7 +347,11 @@ void wm_ipc_handle_message(wm_state_t *state, const ipc_message_t *message)
         break;
     case WM_DESTROY_WINDOW:
         window = owned_window(state, message, header);
-        if (window) wm_scene_destroy_window(state, window->id);
+        if (window) {
+            /* The owner itself is closing it: no close request goes back. */
+            window->owner_destroying = true;
+            wm_scene_destroy_window(state, window->id);
+        }
         break;
     case WM_SET_WINDOW_RECT: {
         struct set_frame_message {
@@ -559,6 +563,62 @@ void wm_ipc_handle_message(wm_state_t *state, const ipc_message_t *message)
     case WM_SET_WINDOW_ICON_PATH:
         handle_icon_path(state, message, header);
         break;
+    case WM_SET_WINDOW_TITLE: {
+        if (!message_has(message, sizeof(wm_set_title_t))) break;
+        window = owned_window(state, message, header);
+        if (!window) break;
+        const wm_set_title_t *command = (const void *)message->data;
+        char title[WM_TITLE_MAX];
+        size_t n = 0u;
+        while (n < WM_SET_TITLE_MAX && command->title[n] != '\0') ++n;
+        /* Cut on a UTF-8 character boundary, not in the middle of one. */
+        if (n > WM_TITLE_MAX - 1u) {
+            n = WM_TITLE_MAX - 1u;
+            while (n > 0u && ((uint8_t)command->title[n] & 0xC0u) == 0x80u) --n;
+        }
+        memcpy(title, command->title, n);
+        title[n] = '\0';
+        if (strcmp(window->title, title) != 0) {
+            memcpy(window->title, title, n + 1u);
+            wm_window_mark_frame_damage(state, window);
+            wm_compositor_damage_all(state); /* the taskbar shows it too */
+        }
+        break;
+    }
+    case WM_SET_WINDOW_CLOSE_POLICY: {
+        struct close_policy_message {
+            wm_msg_header_t header;
+            bool owner_handles;
+        };
+        if (!message_has(message, sizeof(struct close_policy_message))) break;
+        window = owned_window(state, message, header);
+        if (window)
+            window->owner_handles_close =
+                ((const struct close_policy_message *)message->data)->owner_handles;
+        break;
+    }
+    case WM_GET_CONTENT_RECT: {
+        struct {
+            wm_msg_header_t header;
+            int32_t status;
+            uint32_t x, y, width, height;
+        } response;
+        memset(&response, 0, sizeof(response));
+        response.header.type = WM_GET_CONTENT_RECT;
+        response.header.request_id = header->request_id;
+        response.header.window_id = header->window_id;
+        window = owned_window(state, message, header);
+        response.status = window ? WM_STATUS_OK : WM_STATUS_NOT_FOUND;
+        if (window) {
+            uint32_t title_h = window->is_system ? 0u : state->theme.title_height;
+            response.x = (uint32_t)window->frame.x;
+            response.y = (uint32_t)(window->frame.y + (int32_t)title_h);
+            response.width = window->frame.w;
+            response.height = window->frame.h;
+        }
+        ipc_send_message(message->sender_pid, &response, sizeof(response));
+        break;
+    }
     case WM_SET_WINDOW_SURFACE_OPAQUE: {
         struct opaque_message {
             wm_msg_header_t header;

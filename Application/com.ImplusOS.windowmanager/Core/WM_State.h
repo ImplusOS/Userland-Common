@@ -185,6 +185,11 @@ typedef struct wm_window {
     bool minimized;
     bool maximized;
     bool close_requested;
+    /* WM_SET_WINDOW_CLOSE_POLICY: close goes to the owner as
+     * WM_CLOSE_REQUESTED, and the owner is never killed for it. */
+    bool owner_handles_close;
+    /* WM_DESTROY_WINDOW from the owner is under way. */
+    bool owner_destroying;
     bool hover_close;
     bool hover_maximize;
     bool hover_minimize;
@@ -260,6 +265,10 @@ typedef struct {
     bool previous_cursor_visible;
     wm_cursor_style_t previous_cursor_style;
     uint64_t next_frame_ms;
+    /* The window being drawn is going into its own GPU layer texture
+     * (Compositor/WM_Gpu.c), cleared to transparent first, rather than onto
+     * the composited desktop: see wm_decoration_draw_window(). */
+    bool layer_render;
 } wm_compositor_t;
 
 typedef struct {

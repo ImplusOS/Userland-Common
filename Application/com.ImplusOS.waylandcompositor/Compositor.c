@@ -605,17 +605,31 @@ static bool input_poll_panel(void)
     int32_t dx = 0, dy = 0, wheel = 0;
     uint8_t buttons = g_buttons;
     uint32_t moves = 0;
+    bool have_abs = false;
+    int32_t abs_x = 0, abs_y = 0;
     while (input_read_mouse(&raw) > 0) {
-        dx += (int16_t)raw.x;
-        dy += (int16_t)raw.y;
+        if ((raw.flags & INPUT_MOUSE_FLAG_ABSOLUTE) != 0u) {
+            abs_x = (int32_t)(((uint64_t)raw.x *
+                               (g_out.w > 0u ? g_out.w - 1u : 0u)) /
+                              INPUT_MOUSE_ABS_MAX);
+            abs_y = (int32_t)(((uint64_t)raw.y *
+                               (g_out.h > 0u ? g_out.h - 1u : 0u)) /
+                              INPUT_MOUSE_ABS_MAX);
+            have_abs = true;
+            dx = 0;
+            dy = 0;
+        } else {
+            dx += (int16_t)raw.x;
+            dy += (int16_t)raw.y;
+        }
         wheel += raw.wheel;
         buttons = raw.buttons;
         ++moves;
     }
     if (moves > 0u) {
         any = true;
-        int32_t nx = g_ptr_x + dx;
-        int32_t ny = g_ptr_y + dy;
+        int32_t nx = (have_abs ? abs_x : g_ptr_x) + dx;
+        int32_t ny = (have_abs ? abs_y : g_ptr_y) + dy;
         if (nx < 0) nx = 0;
         if (ny < 0) ny = 0;
         if (nx >= (int32_t)g_out.w) nx = (int32_t)g_out.w - 1;

@@ -15,7 +15,15 @@ uint32_t wm_color_blend(uint32_t background, uint32_t foreground)
                       (((background >> 8u) & 0xFFu) * inverse) + 127u) / 255u;
     uint32_t blue = (((foreground & 0xFFu) * alpha) +
                      ((background & 0xFFu) * inverse) + 127u) / 255u;
-    return 0xFF000000u | (red << 16u) | (green << 8u) | blue;
+    /* Porter-Duff "over" with a premultiplied destination. On an opaque
+     * destination (the CPU-composited desktop) this is the familiar
+     * straight-alpha mix and the result stays opaque. On a GPU layer --
+     * cleared to transparent black -- the same colour arithmetic yields the
+     * premultiplied colour and this alpha the layer's coverage, which is
+     * exactly what the GPU's ONE / ONE_MINUS_SRC_ALPHA blend expects. */
+    uint32_t out_alpha = alpha +
+        (((background >> 24u) * inverse) + 127u) / 255u;
+    return (out_alpha << 24u) | (red << 16u) | (green << 8u) | blue;
 }
 
 uint32_t wm_color_lerp(uint32_t a, uint32_t b, uint32_t numerator, uint32_t denominator)

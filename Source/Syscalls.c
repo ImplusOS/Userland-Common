@@ -31,9 +31,11 @@ static int32_t g_cached_wm_pid = -1;
 #define WM_SEND_RETRY_TIMEOUT_MS  1000ULL
 
 static input_keyboard_event_t g_kbd_queue[MAX_INPUT_QUEUE];
+static window_id_t g_kbd_wid[MAX_INPUT_QUEUE];
 static uint32_t g_kbd_head = 0, g_kbd_tail = 0, g_kbd_count = 0;
 
 static input_mouse_event_t g_mouse_queue[MAX_INPUT_QUEUE];
+static window_id_t g_mouse_wid[MAX_INPUT_QUEUE];
 static uint32_t g_mouse_head = 0, g_mouse_tail = 0, g_mouse_count = 0;
 
 static ipc_message_t g_deferred_ipc[MAX_DEFERRED_IPC_QUEUE];
@@ -55,10 +57,20 @@ static window_backing_mapping_t g_window_backing_mappings[256];
  * back by window_poll_resize(). Only the newest one matters -- an interactive
  * resize sends one per pointer frame and every earlier size is already
  * stale by the time the client looks. */
-static window_id_t g_resize_window_id;
-static uint32_t    g_resize_width;
-static uint32_t    g_resize_height;
-static bool        g_resize_pending;
+/* One slot per window, so a client with several windows (XSession hosts
+ * one per X top-level) does not lose one window's resize to another's. */
+#define MAX_PENDING_RESIZES 32u
+static struct {
+    window_id_t window_id;
+    uint32_t    width;
+    uint32_t    height;
+    bool        pending;
+} g_resizes[MAX_PENDING_RESIZES];
+
+/* WM_CLOSE_REQUESTED for windows under WM_SET_WINDOW_CLOSE_POLICY. */
+#define MAX_PENDING_CLOSES 32u
+static window_id_t g_close_queue[MAX_PENDING_CLOSES];
+static uint32_t g_close_count;
 
 extern uint64_t syscall0(uint64_t num);
 extern uint64_t syscall1(uint64_t num, uint64_t arg1);
@@ -107,6 +119,7 @@ static bool handle_input_message(const ipc_message_t *msg)
             memcpy(&g_kbd_queue[g_kbd_head],
                    msg->data + sizeof(wm_msg_header_t),
                    sizeof(input_keyboard_event_t));
+            g_kbd_wid[g_kbd_head] = hdr->window_id;
             g_kbd_head = (g_kbd_head + 1u) % MAX_INPUT_QUEUE;
             ++g_kbd_count;
         }
@@ -119,6 +132,7 @@ static bool handle_input_message(const ipc_message_t *msg)
             memcpy(&g_mouse_queue[g_mouse_head],
                    msg->data + sizeof(wm_msg_header_t),
                    sizeof(input_mouse_event_t));
+            g_mouse_wid[g_mouse_head] = hdr->window_id;
             g_mouse_head = (g_mouse_head + 1u) % MAX_INPUT_QUEUE;
             ++g_mouse_count;
         }
@@ -128,11 +142,31 @@ static bool handle_input_message(const ipc_message_t *msg)
         if (msg->size < sizeof(wm_window_resized_t)) return true;
         const wm_window_resized_t *event =
             (const wm_window_resized_t *)(const void *)msg->data;
-        g_resize_window_id = event->header.window_id;
-        g_resize_width     = event->width;
-        g_resize_height    = event->height;
-        g_resize_pending   = true;
+        uint32_t slot = MAX_PENDING_RESIZES;
+        for (uint32_t i = 0u; i < MAX_PENDING_RESIZES; ++i) {
+            if (g_resizes[i].pending &&
+                g_resizes[i].window_id == event->header.window_id) {
+                slot = i;
+                break;
+            }
+            if (!g_resizes[i].pending && slot == MAX_PENDING_RESIZES) slot = i;
+        }
+        if (slot < MAX_PENDING_RESIZES) {
+            g_resizes[slot].window_id = event->header.window_id;
+            g_resizes[slot].width     = event->width;
+            g_resizes[slot].height    = event->height;
+            g_resizes[slot].pending   = true;
+        }
         return true;
+    }
+    if (hdr->type == WM_CLOSE_REQUESTED) {
+        if (g_close_count < MAX_PENDING_CLOSES) {
+            g_close_queue[g_close_count++] = hdr->window_id;
+        }
+        return true;
+    }
+    if (hdr->type == WM_WINDOW_DESTROYED) {
+        return true; /* nothing to do: no state is kept per window here */
     }
     return false;
 }
@@ -766,6 +800,61 @@ int32_t window_get_rect(window_id_t wid, uint32_t *x, uint32_t *y, uint32_t *w, 
     return -1;
 }
 
+int32_t window_get_content_rect(window_id_t wid, uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h)
+{
+    if (wid == 0 || x == NULL || y == NULL || w == NULL || h == NULL) {
+        os_set_errno(EINVAL);
+        return WM_STATUS_INVALID_ARG;
+    }
+
+    struct {
+        wm_msg_header_t hdr;
+    } cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.hdr.type = WM_GET_CONTENT_RECT;
+    cmd.hdr.request_id = ++g_wm_request_id;
+    cmd.hdr.window_id = wid;
+
+    int32_t wm_pid = window_get_wm_pid();
+    if (wm_pid < 0) {
+        return -1;
+    }
+    if (ipc_send_message(wm_pid, &cmd, sizeof(cmd)) < 0) {
+        return -1;
+    }
+
+    ipc_message_t resp __attribute__((aligned(16)));
+    uint64_t deadline = get_uptime_ms() + WM_RPC_TIMEOUT_MS;
+    while (!deadline_expired(deadline)) {
+        if (ipc_receive_raw(&resp) == 0) {
+            if (resp.size >= sizeof(wm_msg_header_t) + sizeof(int32_t) + (sizeof(uint32_t) * 4U)) {
+                struct {
+                    wm_msg_header_t hdr;
+                    int32_t status;
+                    uint32_t x, y, w, h;
+                } *reply = (void *)resp.data;
+
+                if (reply->hdr.type == WM_GET_CONTENT_RECT &&
+                    reply->hdr.request_id == cmd.hdr.request_id) {
+                    if (reply->status != WM_STATUS_OK) {
+                        return os_errno_from_i32_status(reply->status);
+                    }
+                    *x = reply->x;
+                    *y = reply->y;
+                    *w = reply->w;
+                    *h = reply->h;
+                    os_clear_errno();
+                    return WM_STATUS_OK;
+                }
+            }
+            preserve_unhandled_message(&resp);
+        }
+        process_yield();
+    }
+    os_set_errno(ETIMEDOUT);
+    return -1;
+}
+
 window_id_t window_get_focus(void)
 {
     struct {
@@ -1071,6 +1160,27 @@ int32_t window_input_keyboard_poll(input_keyboard_event_t *out)
     return 0;
 }
 
+int32_t window_input_keyboard_poll_from(input_keyboard_event_t *out,
+                                        window_id_t *out_wid)
+{
+    if (out == NULL) {
+        os_set_errno(EINVAL);
+        return -1;
+    }
+    ipc_message_t msg;
+    uint32_t drain_count = 0;
+    while (drain_count < IPC_DRAIN_MAX && ipc_receive_raw(&msg) == 0) {
+        preserve_unhandled_message(&msg);
+        ++drain_count;
+    }
+    if (g_kbd_count == 0) return 0;
+    *out = g_kbd_queue[g_kbd_tail];
+    if (out_wid) *out_wid = g_kbd_wid[g_kbd_tail];
+    g_kbd_tail = (g_kbd_tail + 1) % MAX_INPUT_QUEUE;
+    g_kbd_count--;
+    return 1;
+}
+
 int32_t window_input_mouse_poll(input_mouse_event_t *out)
 {
     if (out == NULL) {
@@ -1091,6 +1201,27 @@ int32_t window_input_mouse_poll(input_mouse_event_t *out)
         return 1;
     }
     return 0;
+}
+
+int32_t window_input_mouse_poll_from(input_mouse_event_t *out,
+                                     window_id_t *out_wid)
+{
+    if (out == NULL) {
+        os_set_errno(EINVAL);
+        return -1;
+    }
+    ipc_message_t msg;
+    uint32_t drain_count = 0;
+    while (drain_count < IPC_DRAIN_MAX && ipc_receive_raw(&msg) == 0) {
+        preserve_unhandled_message(&msg);
+        ++drain_count;
+    }
+    if (g_mouse_count == 0) return 0;
+    *out = g_mouse_queue[g_mouse_tail];
+    if (out_wid) *out_wid = g_mouse_wid[g_mouse_tail];
+    g_mouse_tail = (g_mouse_tail + 1) % MAX_INPUT_QUEUE;
+    g_mouse_count--;
+    return 1;
 }
 
 int32_t window_input_keyboard_wait(input_keyboard_event_t *out)
@@ -1487,12 +1618,57 @@ int32_t window_poll_resize(window_id_t wid, uint32_t *out_w, uint32_t *out_h)
         ++drain_count;
     }
 
-    if (!g_resize_pending) return 0;
-    if (wid != 0u && g_resize_window_id != wid) return 0;
-    g_resize_pending = false;
-    if (out_w) *out_w = g_resize_width;
-    if (out_h) *out_h = g_resize_height;
+    for (uint32_t i = 0u; i < MAX_PENDING_RESIZES; ++i) {
+        if (!g_resizes[i].pending) continue;
+        if (wid != 0u && g_resizes[i].window_id != wid) continue;
+        g_resizes[i].pending = false;
+        if (out_w) *out_w = g_resizes[i].width;
+        if (out_h) *out_h = g_resizes[i].height;
+        return 1;
+    }
+    return 0;
+}
+
+int32_t window_poll_close(window_id_t *out_wid)
+{
+    ipc_message_t message;
+    uint32_t drain_count = 0u;
+    while (drain_count < IPC_DRAIN_MAX && ipc_receive_raw(&message) == 0) {
+        preserve_unhandled_message(&message);
+        ++drain_count;
+    }
+    if (g_close_count == 0u) return 0;
+    if (out_wid) *out_wid = g_close_queue[0];
+    for (uint32_t i = 1u; i < g_close_count; ++i) {
+        g_close_queue[i - 1u] = g_close_queue[i];
+    }
+    --g_close_count;
     return 1;
+}
+
+int32_t window_set_title(window_id_t wid, const char *title)
+{
+    if (wid == 0u || title == NULL) return WM_STATUS_INVALID_ARG;
+    wm_set_title_t command;
+    memset(&command, 0, sizeof(command));
+    command.header.type = WM_SET_WINDOW_TITLE;
+    command.header.window_id = wid;
+    strncpy(command.title, title, sizeof(command.title) - 1u);
+    return ipc_send_message(window_get_wm_pid(), &command, sizeof(command));
+}
+
+int32_t window_set_close_policy(window_id_t wid, bool owner_handles)
+{
+    if (wid == 0u) return WM_STATUS_INVALID_ARG;
+    struct {
+        wm_msg_header_t header;
+        bool owner_handles;
+    } command;
+    memset(&command, 0, sizeof(command));
+    command.header.type = WM_SET_WINDOW_CLOSE_POLICY;
+    command.header.window_id = wid;
+    command.owner_handles = owner_handles;
+    return ipc_send_message(window_get_wm_pid(), &command, sizeof(command));
 }
 
 void window_release_backing_store(window_id_t wid)
@@ -1707,6 +1883,12 @@ int32_t process_kill(int32_t pid)
      * SIGQUIT. Ask for SIGKILL explicitly. */
     return (int32_t)syscall2(SYSCALL_TKILL_NUM, (uint64_t)(int64_t)pid,
                              9ULL /* SIGKILL */);
+}
+
+int32_t process_send_signal(int32_t pid, int32_t signum)
+{
+    return (int32_t)syscall2(SYSCALL_TKILL_NUM, (uint64_t)(int64_t)pid,
+                             (uint64_t)(int64_t)signum);
 }
 
 #define SYSCALL_SET_PROCESS_PRIORITY_NUM 236ULL
@@ -2156,4 +2338,24 @@ int32_t read_kernel_log(char *buf, uint32_t buf_size)
         (int32_t)syscall2(SYSCALL_READ_KERNEL_LOG,
                           (uint64_t)(uintptr_t)buf,
                           (uint64_t)buf_size));
+}
+
+int64_t file_ioctl(int32_t fd, uint64_t request, void *arg)
+{
+    return (int64_t)syscall3(SYSCALL_IOCTL_EX, (uint64_t)(int64_t)fd,
+                             request, (uint64_t)(uintptr_t)arg);
+}
+
+void *file_dev_mmap(int32_t fd, uint64_t offset, uint64_t length)
+{
+    int64_t address = (int64_t)syscall3(SYSCALL_FILE_DEV_MMAP,
+                                        (uint64_t)(int64_t)fd, offset, length);
+    if (address <= 0) return NULL;
+    return (void *)(uintptr_t)address;
+}
+
+int64_t os_munmap(void *address, uint64_t length)
+{
+    return (int64_t)syscall2(SYSCALL_MUNMAP, (uint64_t)(uintptr_t)address,
+                             length);
 }

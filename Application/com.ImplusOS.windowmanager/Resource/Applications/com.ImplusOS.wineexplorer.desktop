@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Wine Explorer
+Name[ja]=Wine エクスプローラー
+Comment=Browse the Wine prefix with Wine's built-in explorer.exe
+Comment[ja]=Wine内蔵のexplorer.exeでWineのドライブを閲覧
+Exec=/Userland/Wine/Wine.ELF explorer.exe
+Icon=wine
+Categories=System;Emulator;
+X-ImplusOS-Linux=true
+X-ImplusOS-Geometry=1024x680

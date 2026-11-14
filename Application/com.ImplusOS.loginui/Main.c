@@ -656,8 +656,13 @@ static void mouse_poll(mouse_t *m) {
     /* Raw mouse events are relative: the x/y fields are int16 deltas
      * (matches WindowManager's non-absolute path). Accumulate + clamp. */
     while (input_read_mouse(&ev) > 0) {
-        m->x += (int)(int16_t)ev.x;
-        m->y += (int)(int16_t)ev.y;
+        if ((ev.flags & INPUT_MOUSE_FLAG_ABSOLUTE) != 0u) {
+            m->x = (int)(((long)ev.x * (long)(g_w - 1)) / (long)INPUT_MOUSE_ABS_MAX);
+            m->y = (int)(((long)ev.y * (long)(g_h - 1)) / (long)INPUT_MOUSE_ABS_MAX);
+        } else {
+            m->x += (int)(int16_t)ev.x;
+            m->y += (int)(int16_t)ev.y;
+        }
         if (m->x < 0) m->x = 0; else if (m->x > g_w - 1) m->x = g_w - 1;
         if (m->y < 0) m->y = 0; else if (m->y > g_h - 1) m->y = g_h - 1;
         bool now = (ev.buttons & INPUT_MOUSE_BTN_LEFT) != 0;
