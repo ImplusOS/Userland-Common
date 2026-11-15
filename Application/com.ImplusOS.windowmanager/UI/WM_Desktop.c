@@ -44,7 +44,7 @@ static wm_icon_kind_t kind_for(const char *label, const char *path,
     if (strstr(path, "editor"))      return WM_ICON_EDIT;
     if (strstr(path, "filemanager")) return WM_ICON_FOLDER;
     if (strstr(path, "settings"))    return WM_ICON_SETTINGS;
-    if (strstr(path, "processmanager")) return WM_ICON_MEMORY;
+    if (strstr(path, "taskmanager")) return WM_ICON_MEMORY;
     if (strstr(path, "linuxapp") || strstr(path, "gtk3demo"))
         return WM_ICON_APPS;
     return WM_ICON_DOC;
@@ -184,13 +184,13 @@ void wm_desktop_draw(wm_state_t *state, wm_canvas_t *canvas)
         /* Desktop icons sit straight on the wallpaper: no plate behind
          * them and no shadow under the label, so the picture shows through
          * and the grid stays quiet. */
-        const m3_scheme_t *m3 = &state->theme.color;
-        uint32_t on_wallpaper = m3_scheme_is_dark(m3) ? m3->on_surface
-                                                      : m3->inverse_on_surface;
+        const theme_t *th = &state->theme.color;
+        uint32_t on_wallpaper = th->dark ? th->text
+                                                      : th->surface;
         if (app && app->icon_pixels) {
             wm_canvas_blit_scaled(canvas, box, app->icon_pixels,
                                   app->icon_width, app->icon_height, 255u,
-                                  M3_SHAPE_SMALL);
+                                  THEME_RADIUS);
         } else if (app && app->vector_icon >= 0) {
             wm_icon_draw(canvas, box, (wm_icon_kind_t)app->vector_icon,
                          on_wallpaper);
@@ -204,7 +204,7 @@ void wm_desktop_draw(wm_state_t *state, wm_canvas_t *canvas)
         const char *txt = g_icons[i].label[0] ? g_icons[i].label
                         : app                 ? app->name
                                               : g_icons[i].path;
-        float size = state->theme.type.label_small;
+        float size = THEME_FONT_SMALL;
         uint32_t tw = wm_font_measure(&state->font, txt, size);
         int32_t tx = label.x + ((int32_t)label.w - (int32_t)tw) / 2;
         if (tx < label.x) tx = label.x;

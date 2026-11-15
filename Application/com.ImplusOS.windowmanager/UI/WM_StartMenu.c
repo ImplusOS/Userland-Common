@@ -137,24 +137,24 @@ wm_rect_t wm_start_menu_rect(const wm_state_t *state)
  * up, which is what this did, reserved some sixty pixels of empty space
  * between the header and the search box -- and took the room out of the
  * application list below it. */
-static uint32_t sm_header_height(const wm_state_t *state)
+static uint32_t sm_header_height(void)
 {
-    uint32_t title_line = (uint32_t)(state->theme.type.title_medium + 0.5f) + 4u;
-    uint32_t sub_line = (uint32_t)(state->theme.type.label_small + 0.5f) + 2u;
+    uint32_t title_line = (uint32_t)(THEME_FONT_LARGE + 0.5f) + 4u;
+    uint32_t sub_line = (uint32_t)(THEME_FONT_SMALL + 0.5f) + 2u;
     uint32_t text_column = title_line + sub_line;
     uint32_t tallest = text_column > SM_ICON_SIZE ? text_column : SM_ICON_SIZE;
     return SM_HEADER_PAD_TOP + tallest + SM_HEADER_PAD_TOP;
 }
 
-static uint32_t sm_label_height(const wm_state_t *state)
+static uint32_t sm_label_height(void)
 {
-    return (uint32_t)(state->theme.type.label_medium + 0.5f) + 10u;
+    return (uint32_t)(THEME_FONT_SMALL + 0.5f) + 10u;
 }
 
-static uint32_t sm_card_height(const wm_state_t *state)
+static uint32_t sm_card_height(void)
 {
-    uint32_t name_h = (uint32_t)(state->theme.type.body_medium + 0.5f) + 4u;
-    uint32_t sub_h = (uint32_t)(state->theme.type.label_small + 0.5f) + 2u;
+    uint32_t name_h = (uint32_t)(THEME_FONT_BODY + 0.5f) + 4u;
+    uint32_t sub_h = (uint32_t)(THEME_FONT_SMALL + 0.5f) + 2u;
     uint32_t content = SM_CARD_PAD_Y + name_h + 2u + sub_h + SM_CARD_PAD_Y;
     uint32_t icon_area = SM_CARD_PAD_X + 36u + SM_CARD_PAD_X;
     return content > icon_area ? content : icon_area;
@@ -166,22 +166,22 @@ static uint32_t sm_card_height(const wm_state_t *state)
  * from the same place. */
 #define SM_SEARCH_GAP 5u
 
-static uint32_t sm_content_top(const wm_state_t *state)
+static uint32_t sm_content_top(void)
 {
-    return sm_header_height(state) + SM_SEARCH_GAP + SM_SEARCH_H +
-           sm_label_height(state);
+    return sm_header_height() + SM_SEARCH_GAP + SM_SEARCH_H +
+           sm_label_height();
 }
 
-static uint32_t sm_viewport_bottom(const wm_state_t *state)
+static uint32_t sm_viewport_bottom(void)
 {
-    return sm_content_top(state) + sm_card_height(state) + 8u;
+    return sm_content_top() + sm_card_height() + 8u;
 }
 
 static wm_rect_t app_viewport_rect(const wm_state_t *state)
 {
     wm_rect_t menu = wm_start_menu_rect(state);
-    uint32_t top = sm_content_top(state);
-    uint32_t bottom = sm_viewport_bottom(state);
+    uint32_t top = sm_content_top();
+    uint32_t bottom = sm_viewport_bottom();
     uint32_t height = menu.h > bottom ? menu.h - bottom : 0u;
     uint32_t width  = menu.w > 24u ? menu.w - 24u : 0u;
     return (wm_rect_t){menu.x + 12, (int32_t)(menu.y + (int32_t)top), width, height};
@@ -192,16 +192,16 @@ static wm_rect_t app_viewport_rect(const wm_state_t *state)
  * limit can be a division any more. Both are found by walking the rows and
  * accumulating height, forwards from the first visible row and backwards
  * from the last. */
-static uint32_t sm_section_height(const wm_state_t *state)
+static uint32_t sm_section_height(void)
 {
-    return (uint32_t)(state->theme.type.label_medium + 0.5f) + 16u;
+    return (uint32_t)(THEME_FONT_SMALL + 0.5f) + 16u;
 }
 
 static uint32_t row_height(const wm_state_t *state, uint32_t row)
 {
     if (row >= state->filter_count) return 0u;
     return state->menu_rows[row].kind == WM_MENU_ROW_HEADER
-        ? sm_section_height(state) : sm_card_height(state);
+        ? sm_section_height() : sm_card_height();
 }
 
 static uint32_t rows_from(const wm_state_t *state, uint32_t first)
@@ -362,15 +362,13 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
     ensure_filter_cache(state);
     wm_start_menu_clamp_scroll(state);
 
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
-    uint32_t radius = m3_shape_radius(M3_SHAPE_EXTRA_LARGE, menu.w, menu.h);
-    uint32_t container = m3_elevated(m3, m3->surface_container,
-                                        M3_ELEVATION_3);
+    const theme_t *th = &state->theme.color;
+    uint32_t radius = THEME_RADIUS_LARGE;
+    uint32_t container = th->surface;
 
-    wm_canvas_elevation_shadow(canvas, menu, radius, M3_ELEVATION_3,
-                               m3_alpha(m3->shadow, 22u), 255u);
-    wm_canvas_fill_rounded(canvas, menu, radius, m3->outline_variant);
+    wm_canvas_shadow(canvas, menu, radius, WM_SHADOW_POPUP,
+                               color_alpha(0xFF000000u, 22u), 255u);
+    wm_canvas_fill_rounded(canvas, menu, radius, th->border);
     wm_canvas_fill_rounded(canvas,
         (wm_rect_t){menu.x + 1, menu.y + 1, menu.w - 2u, menu.h - 2u},
         radius > 0u ? radius - 1u : 0u, container);
@@ -381,11 +379,11 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
                             menu.y + (int32_t)SM_HEADER_PAD_TOP,
                             SM_ICON_SIZE, SM_ICON_SIZE};
         wm_canvas_fill_rounded(canvas, avatar,
-            m3_shape_radius(M3_SHAPE_FULL, avatar.w, avatar.h),
-            m3->primary_container);
+            wm_pill_radius(avatar.w, avatar.h),
+            th->accent_soft);
         wm_icon_draw(canvas,
             (wm_rect_t){avatar.x + 6, avatar.y + 6, avatar.w - 12u, avatar.h - 12u},
-            WM_ICON_PERSON, m3->on_primary_container);
+            WM_ICON_PERSON, th->text);
         int32_t text_x = menu.x + (int32_t)SM_HEADER_PAD_LEFT +
                          (int32_t)SM_ICON_SIZE + (int32_t)SM_HEADER_GAP;
         uint32_t text_max = menu.w > (SM_HEADER_PAD_LEFT + SM_ICON_SIZE +
@@ -393,49 +391,49 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
             menu.w - SM_HEADER_PAD_LEFT - SM_ICON_SIZE - SM_HEADER_GAP - 16u : 0u;
         wm_font_draw(&state->font, canvas, text_x,
                      menu.y + (int32_t)SM_HEADER_PAD_TOP,
-                     sm_session_user(), m3->on_surface, type->title_medium,
+                     sm_session_user(), th->text, THEME_FONT_LARGE,
                      text_max);
         wm_font_draw(&state->font, canvas, text_x,
                      menu.y + (int32_t)SM_HEADER_PAD_TOP +
-                         (int32_t)(type->title_medium + 0.5f) + 2,
-                     "ImplusOS", m3->on_surface_variant, type->label_small,
+                         (int32_t)(THEME_FONT_LARGE + 0.5f) + 2,
+                     "ImplusOS", th->text_dim, THEME_FONT_SMALL,
                      text_max);
     }
 
-    uint32_t sep_y = sm_header_height(state);
+    uint32_t sep_y = sm_header_height();
     wm_canvas_fill(canvas,
         (wm_rect_t){menu.x + 12, menu.y + (int32_t)sep_y, menu.w - 24u, 1u},
-        m3->outline_variant);
+        th->border);
 
     /* --- M3 search bar: a full-shape container on surface-container-high,
      * outlined in primary while it has the keyboard --- */
     {
         int32_t sb_y = menu.y + (int32_t)sep_y + (int32_t)SM_SEARCH_GAP;
         wm_rect_t sb = {menu.x + 12, sb_y, menu.w - 24u, SM_SEARCH_H};
-        uint32_t sb_radius = m3_shape_radius(M3_SHAPE_FULL, sb.w, sb.h);
-        wm_canvas_fill_rounded(canvas, sb, sb_radius, m3->surface_container_high);
+        uint32_t sb_radius = wm_pill_radius(sb.w, sb.h);
+        wm_canvas_fill_rounded(canvas, sb, sb_radius, th->surface);
         if (state->search_active)
-            wm_canvas_stroke_rounded(canvas, sb, sb_radius, 2u, m3->primary);
+            wm_canvas_stroke_rounded(canvas, sb, sb_radius, 2u, th->accent);
         uint32_t isz = 20u;
         wm_icon_draw(canvas,
             (wm_rect_t){sb.x + 14, sb.y + (int32_t)(sb.h - isz)/2, isz, isz},
-            WM_ICON_SEARCH, m3->on_surface_variant);
+            WM_ICON_SEARCH, th->text_dim);
         const char *display = state->search_len > 0u ?
             state->search_text : "アプリを検索";
         uint32_t tc = state->search_len > 0u ?
-            m3->on_surface : m3->on_surface_variant;
+            th->text : th->text_dim;
         int32_t text_x = sb.x + 46;
-        int32_t text_y = sb.y + ((int32_t)sb.h - (int32_t)type->body_large) / 2 - 1;
+        int32_t text_y = sb.y + ((int32_t)sb.h - (int32_t)THEME_FONT_LARGE) / 2 - 1;
         wm_font_draw(&state->font, canvas, text_x, text_y,
-                     display, tc, type->body_large,
+                     display, tc, THEME_FONT_LARGE,
                      sb.w > 60u ? sb.w - 60u : 0u);
         if (state->search_active && state->search_len > 0u) {
             uint32_t cursor_x = (uint32_t)text_x +
-                wm_font_measure(&state->font, state->search_text, type->body_large);
+                wm_font_measure(&state->font, state->search_text, THEME_FONT_LARGE);
             wm_canvas_fill(canvas,
                 (wm_rect_t){(int32_t)cursor_x, text_y - 2,
-                            2u, (uint32_t)type->body_large + 4u},
-                m3->primary);
+                            2u, (uint32_t)THEME_FONT_LARGE + 4u},
+                th->accent);
         }
     }
 
@@ -454,7 +452,7 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
             (void)snprintf(label, sizeof(label), "検索結果 (%u)", (unsigned)matches);
         }
         wm_font_draw(&state->font, canvas, menu.x + (int32_t)SM_LABEL_PAD, label_y,
-                     label, m3->on_surface_variant, type->label_medium,
+                     label, th->text_dim, THEME_FONT_SMALL,
                      menu.w > 28u ? menu.w - 28u : 0u);
     }
 
@@ -477,20 +475,20 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
                 wm_app_category_t category =
                     (wm_app_category_t)state->menu_rows[row].value;
                 int32_t text_y = card.y +
-                    (int32_t)(card.h - (uint32_t)(type->label_medium + 0.5f)) / 2;
+                    (int32_t)(card.h - (uint32_t)(THEME_FONT_SMALL + 0.5f)) / 2;
                 const char *heading = wm_app_category_label(category);
                 wm_font_draw(&state->font, canvas, card.x + 12, text_y,
-                             heading, m3->on_surface_variant, type->label_medium,
+                             heading, th->text_dim, THEME_FONT_SMALL,
                              card.w > 24u ? card.w - 24u : 0u);
                 uint32_t heading_w = wm_font_measure(&state->font, heading,
-                                                     type->label_medium);
+                                                     THEME_FONT_SMALL);
                 int32_t rule_x = card.x + 12 + (int32_t)heading_w + 10;
                 int32_t rule_end = card.x + (int32_t)card.w - 12;
                 if (rule_end > rule_x) {
                     wm_canvas_fill(canvas,
-                        (wm_rect_t){rule_x, text_y + (int32_t)(type->label_medium * 0.5f),
+                        (wm_rect_t){rule_x, text_y + (int32_t)(THEME_FONT_SMALL * 0.5f),
                                     (uint32_t)(rule_end - rule_x), 1u},
-                        m3->outline_variant);
+                        th->border);
                 }
                 continue;
             }
@@ -506,19 +504,18 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
             bool pointed = state->launcher_hover_index == (int32_t)app_index;
             bool selected = state->launcher_hover_index < 0 &&
                 state->launcher_selected_index == (int32_t)app_index;
-            uint32_t row_radius = m3_shape_radius(M3_SHAPE_FULL,
-                                                     card.w, card.h);
+            uint32_t row_radius = wm_pill_radius(card.w, card.h);
             uint32_t row_container = container;
-            uint32_t on_row = m3->on_surface;
-            uint32_t on_row_dim = m3->on_surface_variant;
+            uint32_t on_row = th->text;
+            uint32_t on_row_dim = th->text_dim;
             if (selected) {
-                row_container = m3->secondary_container;
-                on_row = m3->on_secondary_container;
-                on_row_dim = m3->on_secondary_container;
+                row_container = th->accent_soft;
+                on_row = th->text;
+                on_row_dim = th->text;
                 wm_canvas_fill_rounded(canvas, card, row_radius, row_container);
             } else if (pointed) {
-                row_container = m3_state_layer(container, m3->on_surface,
-                                                  M3_STATE_HOVER);
+                row_container = color_mix(container, th->text,
+                                                  THEME_HOVER_PCT);
                 wm_canvas_fill_rounded(canvas, card, row_radius, row_container);
             }
 
@@ -527,28 +524,28 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
             if (app->icon_pixels) {
                 wm_canvas_blit_scaled(canvas, icon_rect, app->icon_pixels,
                                       app->icon_width, app->icon_height, 255u,
-                                      M3_SHAPE_SMALL);
+                                      THEME_RADIUS);
             } else if (app->vector_icon >= 0) {
                 wm_canvas_fill_rounded(canvas, icon_rect,
-                    m3_shape_radius(M3_SHAPE_FULL, icon_rect.w, icon_rect.h),
-                    m3->primary_container);
+                    wm_pill_radius(icon_rect.w, icon_rect.h),
+                    th->accent_soft);
                 wm_icon_draw(canvas,
                     (wm_rect_t){icon_rect.x + 8, icon_rect.y + 8,
                                 icon_rect.w - 16u, icon_rect.h - 16u},
-                    (wm_icon_kind_t)app->vector_icon, m3->on_primary_container);
+                    (wm_icon_kind_t)app->vector_icon, th->text);
             } else {
                 wm_canvas_fill_rounded(canvas, icon_rect,
-                    m3_shape_radius(M3_SHAPE_FULL, icon_rect.w, icon_rect.h),
-                    m3->tertiary_container);
+                    wm_pill_radius(icon_rect.w, icon_rect.h),
+                    th->accent_soft);
                 const char *badge = app->badge[0] ? app->badge : "?";
                 uint32_t badge_w = wm_font_measure(&state->font, badge,
-                                                   type->label_large);
+                                                   THEME_FONT_BODY);
                 wm_font_draw(&state->font, canvas,
                              icon_rect.x + (int32_t)(icon_rect.w - badge_w)/2,
                              icon_rect.y +
-                                 (int32_t)(icon_rect.h - (uint32_t)type->label_large)/2,
-                             badge, m3->on_tertiary_container,
-                             type->label_large, 32u);
+                                 (int32_t)(icon_rect.h - (uint32_t)THEME_FONT_BODY)/2,
+                             badge, th->text,
+                             THEME_FONT_BODY, 32u);
             }
 
             /* An M3 assist chip on the entries that run a foreign binary.
@@ -560,43 +557,43 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
             if (app->linux_backed) {
                 const char *chip = "Linux";
                 uint32_t chip_w = wm_font_measure(&state->font, chip,
-                                                  type->label_small) + 18u;
-                uint32_t chip_h = (uint32_t)(type->label_small + 0.5f) + 10u;
+                                                  THEME_FONT_SMALL) + 18u;
+                uint32_t chip_h = (uint32_t)(THEME_FONT_SMALL + 0.5f) + 10u;
                 wm_rect_t chip_rect = {card.x + (int32_t)card.w - (int32_t)chip_w - 14,
                                        card.y + (int32_t)(card.h - chip_h) / 2,
                                        chip_w, chip_h};
                 wm_canvas_stroke_rounded(canvas, chip_rect,
-                    m3_shape_radius(M3_SHAPE_SMALL, chip_rect.w, chip_rect.h),
-                    1u, m3->outline);
+                    THEME_RADIUS,
+                    1u, th->border);
                 wm_font_draw(&state->font, canvas, chip_rect.x + 9,
                              chip_rect.y + 5, chip, on_row_dim,
-                             type->label_small, chip_w);
+                             THEME_FONT_SMALL, chip_w);
                 uint32_t consumed = chip_w + 20u;
                 text_limit = text_limit > consumed ? text_limit - consumed : 0u;
             }
 
             int32_t name_y = card.y + (int32_t)SM_CARD_PAD_Y;
-            int32_t sub_y = name_y + (int32_t)(type->body_medium + 0.5f) + 2;
+            int32_t sub_y = name_y + (int32_t)(THEME_FONT_BODY + 0.5f) + 2;
             wm_font_draw(&state->font, canvas,
                          card.x + 58, name_y,
-                         app->name, on_row, type->body_medium, text_limit);
+                         app->name, on_row, THEME_FONT_BODY, text_limit);
             wm_font_draw(&state->font, canvas,
                          card.x + 58, sub_y,
-                         app_subtitle(app), on_row_dim, type->label_small,
+                         app_subtitle(app), on_row_dim, THEME_FONT_SMALL,
                          card.w > 72u ? card.w - 72u : 0u);
         }
 
         if (total == 0u) {
             wm_font_draw(&state->font, canvas,
                          vp.x + 16, vp.y + 20,
-                         "一致するアプリはありません", m3->on_surface_variant,
-                         type->body_medium, vp.w > 32u ? vp.w - 32u : 0u);
+                         "一致するアプリはありません", th->text_dim,
+                         THEME_FONT_BODY, vp.w > 32u ? vp.w - 32u : 0u);
         }
 
         uint32_t max_scroll = max_scroll_row(state);
         if (max_scroll > 0u && vp.h >= 24u) {
             wm_rect_t track = {vp.x + (int32_t)vp.w - 5, vp.y, 4u, vp.h};
-            wm_canvas_fill_rounded(canvas, track, 2u, m3->outline_variant);
+            wm_canvas_fill_rounded(canvas, track, 2u, th->border);
             uint32_t total_rows = total;
             uint32_t thumb_h = total_rows ?
                 (uint32_t)(((uint64_t)visible_app_rows(state) * vp.h) / total_rows) : vp.h;
@@ -607,7 +604,7 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
                 (uint32_t)(((uint64_t)state->launcher_scroll * travel) / max_scroll) : 0u;
             wm_canvas_fill_rounded(canvas,
                 (wm_rect_t){track.x, track.y + (int32_t)thumb_y, 4u, thumb_h},
-                2u, m3->outline);
+                2u, th->border);
         }
         canvas->clip = old_clip;
     }
@@ -617,23 +614,23 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
         wm_rect_t footer = sm_footer_rect(menu);
         wm_canvas_fill(canvas,
             (wm_rect_t){menu.x + 12, footer.y, menu.w - 24u, 1u},
-            m3->outline_variant);
+            th->border);
 
         wm_rect_t avatar = {footer.x + (int32_t)SM_FOOTER_PAD, footer.y + 12, 32u, 32u};
         wm_canvas_fill_rounded(canvas, avatar,
-            m3_shape_radius(M3_SHAPE_FULL, avatar.w, avatar.h),
-            m3->primary_container);
+            wm_pill_radius(avatar.w, avatar.h),
+            th->accent_soft);
         char initial[4] = {sm_session_user()[0], '\0', '\0', '\0'};
         uint32_t initial_w = wm_font_measure(&state->font, initial,
-                                             type->label_large);
+                                             THEME_FONT_BODY);
         wm_font_draw(&state->font, canvas,
                      avatar.x + (int32_t)(avatar.w - initial_w) / 2,
-                     avatar.y + (int32_t)(avatar.h - (uint32_t)type->label_large) / 2,
-                     initial, m3->on_primary_container, type->label_large, 24u);
+                     avatar.y + (int32_t)(avatar.h - (uint32_t)THEME_FONT_BODY) / 2,
+                     initial, th->text, THEME_FONT_BODY, 24u);
         wm_font_draw(&state->font, canvas,
                      avatar.x + (int32_t)avatar.w + 12,
-                     avatar.y + (int32_t)(avatar.h - (uint32_t)type->body_medium) / 2,
-                     sm_session_user(), m3->on_surface, type->body_medium,
+                     avatar.y + (int32_t)(avatar.h - (uint32_t)THEME_FONT_BODY) / 2,
+                     sm_session_user(), th->text, THEME_FONT_BODY,
                      menu.w > 200u ? menu.w - 200u : 0u);
 
         /* Restarting is an ordinary action; powering off is the one that
@@ -641,13 +638,13 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
          * error container. */
         wm_rect_t rb = sm_session_button_rect(menu, false);
         wm_rect_t sd = sm_session_button_rect(menu, true);
-        uint32_t btn_radius = m3_shape_radius(M3_SHAPE_FULL, sd.w, sd.h);
-        wm_canvas_fill_rounded(canvas, rb, btn_radius, m3->surface_container_high);
-        wm_canvas_fill_rounded(canvas, sd, btn_radius, m3->error_container);
+        uint32_t btn_radius = wm_pill_radius(sd.w, sd.h);
+        wm_canvas_fill_rounded(canvas, rb, btn_radius, th->surface);
+        wm_canvas_fill_rounded(canvas, sd, btn_radius, th->danger);
         wm_icon_draw(canvas, (wm_rect_t){rb.x + 10, rb.y + 10, 20u, 20u},
-                     WM_ICON_RESTART, m3->on_surface_variant);
+                     WM_ICON_RESTART, th->text_dim);
         wm_icon_draw(canvas, (wm_rect_t){sd.x + 10, sd.y + 10, 20u, 20u},
-                     WM_ICON_POWER, m3->on_error_container);
+                     WM_ICON_POWER, th->on_danger);
     }
 }
 

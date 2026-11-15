@@ -4,7 +4,6 @@
 #include "WM_Damage.h"
 
 uint32_t wm_color_blend(uint32_t background, uint32_t foreground);
-uint32_t wm_color_lerp(uint32_t a, uint32_t b, uint32_t numerator, uint32_t denominator);
 
 void wm_canvas_init(wm_canvas_t *canvas, uint32_t *pixels,
                     uint32_t width, uint32_t height, uint32_t stride);
@@ -26,14 +25,9 @@ void wm_canvas_stroke_rounded(wm_canvas_t *canvas, wm_rect_t rect,
                               uint32_t radius, uint32_t thickness,
                               uint32_t color);
 
-/* The M3 drop shadow for an elevation level, drawn under `rect`. Every
- * raised surface in the shell uses this, so a level looks the same height
- * wherever it appears. */
-void wm_canvas_elevation_shadow(wm_canvas_t *canvas, wm_rect_t rect,
-                                uint32_t radius, m3_elevation_t level,
-                                uint32_t shadow_color, uint8_t opacity);
-void wm_canvas_gradient_vertical(wm_canvas_t *canvas, wm_rect_t rect,
-                                 uint32_t top, uint32_t bottom);
+/* A soft drop shadow `spread` px wide under `rect` (see WM_SHADOW_*). */
+void wm_canvas_shadow(wm_canvas_t *canvas, wm_rect_t rect, uint32_t radius,
+                      uint32_t spread, uint32_t shadow_color, uint8_t opacity);
 void wm_canvas_line(wm_canvas_t *canvas, int32_t x0, int32_t y0,
                     int32_t x1, int32_t y1, uint32_t color);
 void wm_canvas_blit(wm_canvas_t *canvas, wm_rect_t destination,
@@ -44,6 +38,3 @@ void wm_canvas_blit_scaled(wm_canvas_t *canvas, wm_rect_t destination,
                            const uint32_t *source, uint32_t source_width,
                            uint32_t source_height, uint8_t opacity,
                            uint32_t corner_radius);
-void wm_canvas_draw_icon(wm_canvas_t *canvas, wm_rect_t destination,
-                         const wm_icon_image_t *icon, uint8_t opacity,
-                         uint32_t corner_radius, uint32_t fallback_color);

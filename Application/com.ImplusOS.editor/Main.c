@@ -1,5 +1,5 @@
 /*
- * com.ImplusOS.editor -- a plain text editor built on the ImUI toolkit.
+ * com.ImplusOS.editor -- a plain text editor built on the UI toolkit.
  *
  *   [New] [Open] [Save]   ( /path/to/file .................... )   1234 chars
  *   +----------------------------------------------------------------+
@@ -30,7 +30,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "ImUI.h"
+#include "UI.h"
 #include "File.h"
 #include "Process.h"
 #include "Serial.h"
@@ -38,8 +38,8 @@
 #define MAX_FILE (1024u * 1024u)
 #define DISCARD_ARM_MS 5000u
 
-static imui_app_t    *g_app;
-static imui_widget_t *w_name, *w_text, *w_info, *w_status;
+static ui_app_t    *g_app;
+static ui_widget_t *w_name, *w_text, *w_info, *w_status;
 static char           g_dirty;
 
 /* The one-shot "this throws work away" window: set when a destructive
@@ -47,19 +47,19 @@ static char           g_dirty;
 static uint64_t g_arm_ms;
 
 static void update_info(void) {
-    const char *t = imui_textarea_get(w_text);
+    const char *t = ui_get_text(w_text);
     uint32_t chars = (uint32_t)strlen(t), lines = 1;
     for (const char *p = t; *p; ++p) if (*p == '\n') lines++;
     char s[64];
     snprintf(s, sizeof(s), "%s%u chars · %u lines", g_dirty ? "* " : "", chars, lines);
-    imui_set_text(g_app, w_info, s);
+    ui_set_text(w_info, s);
 }
 
 /* The status line is the only place with room for a sentence: the toolbar
  * label next to it is deliberately just the counts. */
 static void note(const char *text) {
-    imui_set_text(g_app, w_status, text);
-    imui_request_paint(g_app);
+    ui_set_text(w_status, text);
+    ui_redraw();
 }
 
 static void note_fmt(const char *fmt, const char *arg) {
@@ -84,9 +84,9 @@ static bool arm_or_pass(const char *what) {
     return false;
 }
 
-static void do_open(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
-    const char *path = imui_get_text(w_name);
+static void do_open(ui_widget_t *w) {
+    (void)w;
+    const char *path = ui_get_text(w_name);
     if (!path || !path[0]) { note("開くファイル名を入力してください"); return; }
 
     file_stat_t st;
@@ -112,25 +112,25 @@ static void do_open(imui_app_t *a, imui_widget_t *w, void *u) {
     }
     file_close(fd);
     buf[got] = '\0';
-    imui_textarea_set(w_text, buf);
+    ui_set_text(w_text, buf);
     free(buf);
     g_dirty = 0;
     g_arm_ms = 0u;
     update_info();
     note_fmt("開きました (%s)", path);
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void do_save(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
-    const char *path = imui_get_text(w_name);
+static void do_save(ui_widget_t *w) {
+    (void)w;
+    const char *path = ui_get_text(w_name);
     if (!path || !path[0]) { note("先にファイル名を決めてください"); return; }
 
     int32_t fd = file_creat(path);
     if (fd < 0) fd = file_open(path, 1);
     if (fd < 0) { note_fmt("保存できません (%s)", path); return; }
 
-    const char *t = imui_textarea_get(w_text);
+    const char *t = ui_get_text(w_text);
     uint32_t len = (uint32_t)strlen(t), off = 0;
     while (off < len) {
         int64_t n = file_write(fd, t + off, len - off);
@@ -152,23 +152,23 @@ static void do_save(imui_app_t *a, imui_widget_t *w, void *u) {
         note_fmt("保存しましたが、古いファイル末尾の切り詰めに失敗しました (%s)", path);
     else
         note_fmt("保存しました (%s)", path);
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void do_new(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void do_new(ui_widget_t *w) {
+    (void)w;
     if (!arm_or_pass("New")) return;
-    imui_textarea_set(w_text, "");
-    imui_set_text(g_app, w_name, "");
+    ui_set_text(w_text, "");
+    ui_set_text(w_name, "");
     g_dirty = 0;
     g_arm_ms = 0u;
     update_info();
     note("新規の空ファイル");
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void on_edit(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_edit(ui_widget_t *w) {
+    (void)w;
     g_dirty = 1;
     update_info();
 }
@@ -176,12 +176,12 @@ static void on_edit(imui_app_t *a, imui_widget_t *w, void *u) {
 /* Shortcuts belong to the app, not to whichever widget happens to have the
  * focus -- Ctrl+S has to save while the caret sits in the text *and* while
  * it sits in the file-name box. */
-static bool on_key(imui_app_t *a, const input_keyboard_event_t *ev) {
+static bool on_key(const input_keyboard_event_t *ev) {
     if ((ev->modifiers & INPUT_KBD_MOD_CTRL) == 0u) return false;
     switch (ev->ascii) {
-    case 's': case 'S': do_save(a, NULL, NULL); return true;
-    case 'o': case 'O': do_open(a, NULL, NULL); return true;
-    case 'n': case 'N': do_new(a, NULL, NULL);  return true;
+    case 's': case 'S': do_save(NULL); return true;
+    case 'o': case 'O': do_open(NULL); return true;
+    case 'n': case 'N': do_new(NULL);  return true;
     default: break;
     }
     return false;
@@ -190,38 +190,31 @@ static bool on_key(imui_app_t *a, const input_keyboard_event_t *ev) {
 int _start(void);
 int _start(void) {
     serial_write_string("[editor] start\n");
-    g_app = imui_create(860, 600, "Editor");
+    g_app = ui_create(860, 600, "Editor");
     if (!g_app) { serial_write_string("[editor] no window\n"); for (;;) {} }
 
-    imui_widget_t *root = g_app->root;
-    root->kind = IMUI_COL; root->pad = 0; root->gap = 0;
+    ui_widget_t *root = g_app->root;
 
-    imui_widget_t *tb = imui_container(root, IMUI_ROW, 8, 6);
-    tb->grow = 0; tb->min_h = 72; tb->fill_bg = true;
-    imui_set_variant(tb, IMUI_FILLED);            /* M3 toolbar bar */
-    imui_button(tb, "New", IMUI_ICON_NEW, do_new, NULL);
-    imui_button(tb, "Open", IMUI_ICON_OPEN, do_open, NULL);
+    ui_widget_t *tb = ui_bar(root, 72);
+    ui_button(tb, "New", UI_ICON_NEW, do_new, NULL);
+    ui_button(tb, "Open", UI_ICON_OPEN, do_open, NULL);
     /* Saving is what this window is for, so it is the one button that
      * carries M3's tonal emphasis. */
-    imui_set_variant(imui_button(tb, "Save", IMUI_ICON_SAVE, do_save, NULL),
-                     IMUI_TONAL);
-    w_name = imui_textbox(tb, "");
+    ui_button(tb, "Save", UI_ICON_SAVE, do_save, NULL);
+    w_name = ui_textbox(tb, "");
     w_name->grow = 1;
-    w_name->on_submit = do_open;
-    w_info = imui_set_type_role(imui_label(tb, "0 chars · 1 lines"),
-                                IMUI_LABEL_SMALL);
+    w_name->on_action = do_open;
+    w_info = ui_caption(tb, "0 chars · 1 lines");
     w_info->min_w = 150;
 
-    imui_widget_t *body = imui_container(root, IMUI_COL, 8, 0);
+    ui_widget_t *body = ui_col(root, 8, 0);
     body->grow = 1;
-    w_text = imui_textarea(body);
+    w_text = ui_textarea(body);
     w_text->on_change = on_edit;
 
-    imui_widget_t *sb = imui_container(root, IMUI_ROW, 8, 0);
-    sb->grow = 0; sb->min_h = 28; sb->fill_bg = true;
-    imui_set_variant(sb, IMUI_FILLED);
-    w_status = imui_set_type_role(imui_label(sb, "Ctrl+S: 保存  Ctrl+O: 開く  Ctrl+N: 新規"),
-                                  IMUI_LABEL_SMALL);
+    ui_widget_t *sb = ui_bar(root, 28);
+    sb->pad = 8; sb->gap = 0;
+    w_status = ui_caption(sb, "Ctrl+S: 保存  Ctrl+O: 開く  Ctrl+N: 新規");
     w_status->grow = 1;
 
     g_app->on_key = on_key;
@@ -229,10 +222,10 @@ int _start(void) {
     /* opened as `editor <path>` ? */
     char arg[512] = {0};
     if (process_get_launch_argument(arg, sizeof(arg)) > 0 && arg[0]) {
-        imui_set_text(g_app, w_name, arg);
-        do_open(g_app, NULL, NULL);
+        ui_set_text(w_name, arg);
+        do_open(NULL);
     }
     update_info();
 
-    return imui_run(g_app);
+    ui_run();
 }

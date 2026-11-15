@@ -2,8 +2,11 @@
 
 #include "../Core/WM_State.h"
 
-/* Window transitions use the M3 duration tokens and easing curves from
- * Userland/API/Source/Material.h, which WM_State.h pulls in. */
+/* Transition lengths: a window opening, being shown or restored, and
+ * leaving (hide, minimize, close). */
+#define WM_ANIM_OPEN_MS 400u
+#define WM_ANIM_SHOW_MS 300u
+#define WM_ANIM_HIDE_MS 200u
 
 void wm_animation_start(wm_state_t *state, wm_window_t *window,
                         wm_transition_t transition, uint32_t duration_ms);

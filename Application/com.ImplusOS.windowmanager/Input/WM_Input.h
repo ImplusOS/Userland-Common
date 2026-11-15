@@ -4,7 +4,6 @@
 #include <stdbool.h>
 
 void wm_input_handle_keyboard(wm_state_t *state, const ipc_message_t *message);
-void wm_input_handle_mouse(wm_state_t *state, const ipc_message_t *message);
 
 /* Drain the kernel's raw HID event queues directly (SYSCALL_INPUT_READ_*).
  * The WM owns cursor position/clamping and keyboard routing entirely in

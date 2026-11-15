@@ -408,18 +408,6 @@ static bool load_app_icon(wm_assets_t *assets, uint32_t index)
     return app->icon_pixels != NULL;
 }
 
-bool wm_assets_init(wm_assets_t *assets)
-{
-    if (!assets) return false;
-    if (!wm_assets_init_metadata(assets)) return false;
-
-    while (wm_assets_load_next_icon(assets)) {
-    }
-
-    (void)wm_assets_reload_wallpaper(assets);
-    return true;
-}
-
 /* Build the launcher list. Desktop entries are the real source; apps.list
  * and the built-in table exist so that an image with a damaged or missing
  * Resource/Applications directory still boots to a usable menu rather than an empty
@@ -506,17 +494,6 @@ bool wm_assets_reload_wallpaper(wm_assets_t *assets)
     assets->wallpaper_height = pixels ? height : 0u;
     assets->wallpaper_load_attempted = true;
     return pixels != NULL;
-}
-
-void wm_assets_destroy(wm_assets_t *assets)
-{
-    if (!assets) return;
-    for (uint32_t i = 0; i < assets->app_count; ++i) free(assets->apps[i].icon_pixels);
-    wm_icon_image_t *icons = &assets->system_icons.launcher;
-    uint32_t icon_count = (uint32_t)(sizeof(assets->system_icons) / sizeof(wm_icon_image_t));
-    for (uint32_t i = 0; i < icon_count; ++i) free(icons[i].pixels);
-    free(assets->wallpaper_pixels);
-    memset(assets, 0, sizeof(*assets));
 }
 
 int32_t wm_assets_launch(const wm_launcher_app_t *app)

@@ -47,7 +47,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "ImUI.h"
+#include "UI.h"
 #include "File.h"
 #include "OSDebug.h"
 #include "Process.h"
@@ -67,8 +67,8 @@
 static const char *const g_view_name[2]   = { "kernel", "apps" };
 static const char *const g_view_needle[2] = { NULL, "[app]" };
 
-static imui_app_t    *g_app;
-static imui_widget_t *w_view, *w_filter, *w_status, *w_pause, *w_source;
+static ui_app_t    *g_app;
+static ui_widget_t *w_view, *w_filter, *w_status, *w_pause, *w_source;
 
 static log_ring_t g_ring;
 static char       g_render[VIEW_BYTES];
@@ -149,16 +149,16 @@ static void poll_log(void)
 static void rebuild_view(void)
 {
     uint32_t shown = 0u;
-    (void)logring_render(&g_ring, imui_get_text(w_filter),
+    (void)logring_render(&g_ring, ui_get_text(w_filter),
                          g_view_needle[g_source], VIEW_MAX_LINES,
                          g_render, sizeof(g_render), &shown);
 
-    imui_textarea_set(w_view, g_render);
+    ui_set_text(w_view, g_render);
     if (!g_paused) {
         /* Autoscroll: the paint pass keeps the caret line on screen, so
          * parking the caret at the end pins the pane to the newest line.
          * While paused the caret stays where the user scrolled it. */
-        w_view->caret = w_view->buf_len;
+        w_view->caret = w_view->len;
     }
 
     char s[128];
@@ -171,15 +171,13 @@ static void rebuild_view(void)
                  g_view_name[g_source], (unsigned long long)g_ring.captured,
                  (unsigned)shown, g_paused ? "PAUSED" : "LIVE");
     }
-    imui_set_text(g_app, w_status, s);
+    ui_set_text(w_status, s);
 }
 
 /* ------------------------------------------------------------ actions */
 
-static void on_tick(imui_app_t *a, imui_widget_t *w, void *u)
+static void on_tick(void)
 {
-    (void)a; (void)w; (void)u;
-
     uint64_t now = get_uptime_ms();
     if (now - g_last_poll < POLL_MS) return;
     g_last_poll = now;
@@ -193,42 +191,42 @@ static void on_tick(imui_app_t *a, imui_widget_t *w, void *u)
     if (!g_dirty || g_paused) return;
     g_dirty = false;
     rebuild_view();
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void do_pause(imui_app_t *a, imui_widget_t *w, void *u)
+static void do_pause(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
+    (void)w;
     g_paused = !g_paused;
-    imui_set_text(g_app, w_pause, g_paused ? "Resume" : "Pause");
+    ui_set_text(w_pause, g_paused ? "Resume" : "Pause");
     rebuild_view();
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void do_clear(imui_app_t *a, imui_widget_t *w, void *u)
+static void do_clear(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
+    (void)w;
     /* Drops what has been captured, not the kernel's ring: the next poll
      * starts from where this one left off rather than replaying the tail. */
     logring_reset(&g_ring);
     rebuild_view();
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void do_source(imui_app_t *a, imui_widget_t *w, void *u)
+static void do_source(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
+    (void)w;
     g_source = (g_source == VIEW_KERNEL) ? VIEW_APPS : VIEW_KERNEL;
     char label[48];
     snprintf(label, sizeof(label), "View: %s", g_view_name[g_source]);
-    imui_set_text(g_app, w_source, label);
+    ui_set_text(w_source, label);
     rebuild_view();
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void do_save(imui_app_t *a, imui_widget_t *w, void *u)
+static void do_save(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
+    (void)w;
     if (g_snap == NULL) return;
 
     /* The whole capture, unfiltered: the log is the artifact, the filter is
@@ -236,7 +234,7 @@ static void do_save(imui_app_t *a, imui_widget_t *w, void *u)
      * read-only ISO9660), so this survives until reboot, not across one. */
     int32_t fd = file_creat(SAVE_PATH);
     if (fd < 0) fd = file_open(SAVE_PATH, 1);
-    if (fd < 0) { imui_set_text(g_app, w_status, "save failed: " SAVE_PATH); return; }
+    if (fd < 0) { ui_set_text(w_status, "save failed: " SAVE_PATH); return; }
 
     uint32_t written = 0u;
     uint64_t total = 0u;
@@ -270,15 +268,15 @@ static void do_save(imui_app_t *a, imui_widget_t *w, void *u)
                  (unsigned)written);
     else
         snprintf(s, sizeof(s), "saved %u lines to " SAVE_PATH, (unsigned)written);
-    imui_set_text(g_app, w_status, s);
-    imui_request_paint(g_app);
+    ui_set_text(w_status, s);
+    ui_redraw();
 }
 
-static void on_filter(imui_app_t *a, imui_widget_t *w, void *u)
+static void on_filter(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
+    (void)w;
     rebuild_view();
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
 /* ---------------------------------------------------------------- main */
@@ -308,46 +306,38 @@ int _start(void)
     log_fmt("[serialmon] tapped %lld lines err=%lld%lld\n",
             (long long)g_ring.captured, (long long)g_last_error, 0LL);
 
-    g_app = imui_create(900, 620, "Serial Monitor");
+    g_app = ui_create(900, 620, "Serial Monitor");
     if (!g_app) {
         serial_write_string("[serialmon] no window\n");
         process_exit(1);
     }
 
-    imui_widget_t *root = g_app->root;
-    root->kind = IMUI_COL; root->pad = 0; root->gap = 0;
+    ui_widget_t *root = g_app->root;
 
-    imui_widget_t *tb = imui_container(root, IMUI_ROW, 8, 6);
-    tb->grow = 0; tb->min_h = 72; tb->fill_bg = true;
-    imui_set_variant(tb, IMUI_FILLED);            /* M3 toolbar bar */
-    w_pause  = imui_button(tb, "Pause", IMUI_ICON_NONE, do_pause, NULL);
-    imui_button(tb, "Clear", IMUI_ICON_TRASH, do_clear, NULL);
-    imui_set_variant(imui_button(tb, "Save", IMUI_ICON_SAVE, do_save, NULL),
-                     IMUI_TONAL);
-    w_source = imui_button(tb, "View: kernel", IMUI_ICON_REFRESH, do_source, NULL);
+    ui_widget_t *tb = ui_bar(root, 72);
+    w_pause  = ui_button(tb, "Pause", UI_ICON_NONE, do_pause, NULL);
+    ui_button(tb, "Clear", UI_ICON_TRASH, do_clear, NULL);
+    ui_button(tb, "Save", UI_ICON_SAVE, do_save, NULL);
+    w_source = ui_button(tb, "View: kernel", UI_ICON_REFRESH, do_source, NULL);
     w_source->min_w = 140;
-    imui_set_type_role(imui_label(tb, "Filter"), IMUI_LABEL_SMALL);
-    w_filter = imui_textbox(tb, "");
+    ui_caption(tb, "Filter");
+    w_filter = ui_textbox(tb, "");
     w_filter->grow = 1;
     w_filter->on_change = on_filter;
-    w_filter->on_submit = on_filter;
+    w_filter->on_action = on_filter;
 
-    imui_widget_t *bar = imui_container(root, IMUI_ROW, 8, 6);
+    ui_widget_t *bar = ui_row(root, 8, 6);
     bar->grow = 0; bar->min_h = 28;
-    w_status = imui_set_type_role(imui_label(bar, ""), IMUI_LABEL_SMALL);
+    w_status = ui_caption(bar, "");
     w_status->grow = 1;
 
-    imui_widget_t *body = imui_container(root, IMUI_COL, 8, 8);
-    w_view = imui_textarea(body);
+    ui_widget_t *body = ui_col(root, 8, 8);
+    w_view = ui_textarea(body);
     w_view->grow = 1;
     w_view->editable = false;      /* read-only: arrows and PgUp/PgDn scroll */
 
     g_app->on_tick = on_tick;
     rebuild_view();
 
-    int rc = imui_run(g_app);
-
-    imui_destroy(g_app);
-    serial_write_string("[serialmon] exit\n");
-    return rc;
+    ui_run();
 }

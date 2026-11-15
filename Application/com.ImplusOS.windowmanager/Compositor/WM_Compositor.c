@@ -121,7 +121,7 @@ void wm_compositor_generate_background(wm_state_t *state)
                    state->compositor.framebuffer_width,
                    state->compositor.framebuffer_height,
                    state->compositor.framebuffer_width);
-    wm_canvas_fill(&canvas, display_bounds(state), state->theme.color.surface_dim);
+    wm_canvas_fill(&canvas, display_bounds(state), state->theme.color.bg);
     if (state->assets.wallpaper_pixels) {
         uint32_t fb_w = state->compositor.framebuffer_width;
         uint32_t fb_h = state->compositor.framebuffer_height;
@@ -268,64 +268,16 @@ static void reset_window_damage(wm_state_t *state)
     }
 }
 
-static void draw_default_cursor(wm_state_t *state, wm_canvas_t *canvas,
-                                int32_t x, int32_t y)
-{
-    static const char shape[WM_CURSOR_HEIGHT][WM_CURSOR_WIDTH + 1u] = {
-        "B.............", "BB............", "BFB...........",
-        "BFFB..........", "BFFFB.........", "BFFFFB........",
-        "BFFFFFB.......", "BFFFFFFB......", "BFFFFFFFB.....",
-        "BFFFFFFFFB....", "BFFFFFFFFFB...", "BFFFFFFFFFFB..",
-        "BFFFFFFBBBBBB.", "BFFFBFFFB.....", "BFFB.BFFB.....",
-        "BFB..BFFB.....", "BB....BFFB....", "B.....BFFB....",
-        ".......BFFB...", ".......BFFB...", "........BB....",
-        "..............",
-    };
-    for (uint32_t row = 0; row < WM_CURSOR_HEIGHT; ++row)
-        for (uint32_t col = 0; col < WM_CURSOR_WIDTH; ++col)
-            if (shape[row][col] != '.')
-                wm_canvas_put(canvas, x+(int32_t)col+2, y+(int32_t)row+2,
-                    m3_alpha(state->theme.color.scrim, 20u));
-    for (uint32_t row = 0; row < WM_CURSOR_HEIGHT; ++row)
-        for (uint32_t col = 0; col < WM_CURSOR_WIDTH; ++col) {
-            if (shape[row][col] == '.') continue;
-            wm_canvas_put(canvas, x+(int32_t)col, y+(int32_t)row,
-                shape[row][col]=='F' ? WM_CURSOR_FILL : state->theme.color.scrim);
-        }
-}
-
-static void draw_resize_cursor(wm_state_t *state, wm_canvas_t *canvas,
-                               int32_t x, int32_t y)
-{
-    uint32_t color   = WM_CURSOR_FILL;
-    uint32_t outline = m3_alpha(state->theme.color.scrim, 60u);
-    int32_t cx = x+7, cy = y+7;
-    bool hz = state->scene.cursor_style == WM_CURSOR_RESIZE_HORIZONTAL;
-    bool vt = state->scene.cursor_style == WM_CURSOR_RESIZE_VERTICAL;
-    bool nwse = state->scene.cursor_style == WM_CURSOR_RESIZE_DIAGONAL_NW_SE;
-    for (int off = -1; off <= 1; ++off) {
-        uint32_t lc = off==0 ? color : outline;
-        if (hz)   wm_canvas_line(canvas,cx-7,cy+off,cx+7,cy+off,lc);
-        else if (vt)   wm_canvas_line(canvas,cx+off,cy-7,cx+off,cy+7,lc);
-        else if (nwse) wm_canvas_line(canvas,cx-6+off,cy-6,cx+6+off,cy+6,lc);
-        else           wm_canvas_line(canvas,cx+6+off,cy-6,cx-6+off,cy+6,lc);
-    }
-}
-
 static void draw_cursor(wm_state_t *state, wm_canvas_t *canvas)
 {
     if (!state->scene.cursor_visible) return;
     int32_t x = (int32_t)state->scene.cursor_x;
     int32_t y = (int32_t)state->scene.cursor_y;
-    /* The pointer is the one thing on screen that has no container to be
-     * legible against -- it crosses the wallpaper, every window's own
-     * surface and whatever a Linux program is drawing -- so it keeps M3's
-     * white body and scrim edge in both schemes instead of taking a tone
-     * from the current one. */
-    (void)draw_default_cursor;
-    (void)draw_resize_cursor;
+    /* The pointer crosses the wallpaper, every window and whatever a Linux
+     * program draws, so it keeps a white body and black edge in both modes
+     * instead of taking a tone from the theme. */
     wm_icon_draw_cursor(canvas, x, y, state->scene.cursor_style,
-                        WM_CURSOR_FILL, state->theme.color.scrim);
+                        WM_CURSOR_FILL, 0xFF000000u);
 }
 
 static void draw_cursor_on_shadow(wm_state_t *state)

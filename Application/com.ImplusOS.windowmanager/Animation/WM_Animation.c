@@ -38,9 +38,10 @@ bool wm_animation_tick(wm_state_t *state, uint64_t now_ms)
             (float)elapsed / (float)window->transition_duration_ms;
         bool appearing = window->transition == WM_TRANSITION_SHOW ||
                          window->transition == WM_TRANSITION_RESTORE;
-        float eased = m3_ease(appearing ? M3_EASE_EMPHASIZED_DECELERATE
-                                       : M3_EASE_EMPHASIZED_ACCELERATE,
-                              progress);
+        /* Cubic ease-out arriving, ease-in leaving. */
+        float inv = 1.0f - progress;
+        float eased = appearing ? 1.0f - inv * inv * inv
+                                : progress * progress * progress;
         if (appearing) {
             window->visual_alpha = eased;
             window->visual_scale = 0.92f + 0.08f * eased;
@@ -68,7 +69,6 @@ bool wm_animation_tick(wm_state_t *state, uint64_t now_ms)
         } else {
             window->visual_alpha = 0.0f;
             window->visual_scale = 0.95f;
-            if (completed == WM_TRANSITION_HIDE) window->visible = false;
             if (completed == WM_TRANSITION_MINIMIZE) window->minimized = true;
             /* The dock changes only when the transition commits. */
             wm_window_mark_frame_damage(state, window);

@@ -33,25 +33,25 @@ static wm_rect_t screen_bounds(const wm_state_t *state)
 /* Severity, in M3 colour roles rather than in traffic-light hex: an error
  * is the error role, a warning is tertiary, and anything else is primary.
  * All three follow the seed, so a retinted desktop retints these too. */
-static uint32_t dialog_accent_color(const m3_scheme_t *scheme,
+static uint32_t dialog_accent_color(const theme_t *scheme,
                                     wm_dialog_type_t type)
 {
     switch (type) {
-    case WM_DIALOG_ERROR:   return scheme->error;
-    case WM_DIALOG_WARNING: return scheme->tertiary;
+    case WM_DIALOG_ERROR:   return scheme->danger;
+    case WM_DIALOG_WARNING: return scheme->accent;
     case WM_DIALOG_INFO:
-    default:                return scheme->primary;
+    default:                return scheme->accent;
     }
 }
 
-static uint32_t dialog_accent_container(const m3_scheme_t *scheme,
+static uint32_t dialog_accent_container(const theme_t *scheme,
                                         wm_dialog_type_t type)
 {
     switch (type) {
-    case WM_DIALOG_ERROR:   return scheme->error_container;
-    case WM_DIALOG_WARNING: return scheme->tertiary_container;
+    case WM_DIALOG_ERROR:   return scheme->danger;
+    case WM_DIALOG_WARNING: return scheme->accent_soft;
     case WM_DIALOG_INFO:
-    default:                return scheme->primary_container;
+    default:                return scheme->accent_soft;
     }
 }
 
@@ -111,11 +111,6 @@ void wm_dialog_close(wm_state_t *state)
     if (!state || !state->dialog.active) return;
     damage_dialog(state);
     state->dialog.active = false;
-}
-
-bool wm_dialog_is_active(const wm_state_t *state)
-{
-    return state && state->dialog.active;
 }
 
 bool wm_dialog_contains(const wm_state_t *state, int32_t x, int32_t y)
@@ -210,8 +205,7 @@ void wm_dialog_draw(wm_state_t *state, wm_canvas_t *canvas)
 {
     if (!state || !canvas || !state->dialog.active) return;
 
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
+    const theme_t *th = &state->theme.color;
 
     int32_t x = state->dialog.x;
     int32_t y = state->dialog.y;
@@ -222,15 +216,13 @@ void wm_dialog_draw(wm_state_t *state, wm_canvas_t *canvas)
     wm_rect_t dialog_rect = {x, y, w, h + title_h};
     if (!wm_rect_intersects(dialog_rect, canvas->clip)) return;
 
-    uint32_t radius = m3_shape_radius(M3_SHAPE_EXTRA_LARGE,
-                                         dialog_rect.w, dialog_rect.h);
-    uint32_t container = m3_elevated(m3, m3->surface_container_high,
-                                        M3_ELEVATION_3);
-    uint32_t accent = dialog_accent_color(m3, state->dialog.type);
+    uint32_t radius = THEME_RADIUS_LARGE;
+    uint32_t container = th->surface;
+    uint32_t accent = dialog_accent_color(th, state->dialog.type);
 
-    wm_canvas_elevation_shadow(canvas, dialog_rect, radius, M3_ELEVATION_3,
-                               m3_alpha(m3->shadow, 25u), 255u);
-    wm_canvas_fill_rounded(canvas, dialog_rect, radius, m3->outline_variant);
+    wm_canvas_shadow(canvas, dialog_rect, radius, WM_SHADOW_POPUP,
+                               color_alpha(0xFF000000u, 25u), 255u);
+    wm_canvas_fill_rounded(canvas, dialog_rect, radius, th->border);
     wm_canvas_fill_rounded(canvas,
         (wm_rect_t){x + 1, y + 1, w > 2u ? w - 2u : w,
                     h + title_h > 2u ? h + title_h - 2u : 0u},
@@ -241,14 +233,14 @@ void wm_dialog_draw(wm_state_t *state, wm_canvas_t *canvas)
     wm_rect_t close_btn = dialog_close_rect(state);
     if (state->dialog.hover_close) {
         wm_canvas_fill_rounded(canvas, close_btn,
-            m3_shape_radius(M3_SHAPE_FULL, close_btn.w, close_btn.h),
-            m3->error_container);
+            wm_pill_radius(close_btn.w, close_btn.h),
+            th->danger);
     }
     wm_icon_draw(canvas,
         (wm_rect_t){close_btn.x + 7, close_btn.y + 7, 18u, 18u},
         WM_ICON_CLOSE,
-        state->dialog.hover_close ? m3->on_error_container
-                                  : m3->on_surface_variant);
+        state->dialog.hover_close ? th->on_danger
+                                  : th->text_dim);
 
     if (!state->font.loaded) return;
 
@@ -258,8 +250,8 @@ void wm_dialog_draw(wm_state_t *state, wm_canvas_t *canvas)
                       WM_DIALOG_HERO, WM_DIALOG_HERO};
     wm_canvas_fill_rounded(canvas,
         (wm_rect_t){hero.x - 8, hero.y - 8, hero.w + 16u, hero.h + 16u},
-        m3_shape_radius(M3_SHAPE_FULL, hero.w + 16u, hero.h + 16u),
-        dialog_accent_container(m3, state->dialog.type));
+        wm_pill_radius(hero.w + 16u, hero.h + 16u),
+        dialog_accent_container(th, state->dialog.type));
     wm_icon_draw(canvas, hero, dialog_icon(state->dialog.type), accent);
 
     int32_t text_x = hero.x + (int32_t)WM_DIALOG_HERO + 20;
@@ -267,23 +259,23 @@ void wm_dialog_draw(wm_state_t *state, wm_canvas_t *canvas)
         w - (uint32_t)(text_x - x) - WM_DIALOG_PAD : 0u;
 
     wm_font_draw(&state->font, canvas, text_x, hero.y - 2,
-                 state->dialog.title, m3->on_surface,
-                 type->title_large, text_max);
+                 state->dialog.title, th->text,
+                 THEME_FONT_TITLE, text_max);
     wm_font_draw(&state->font, canvas, text_x,
-                 hero.y + (int32_t)(type->title_large + 0.5f) + 8,
-                 state->dialog.message, m3->on_surface_variant,
-                 type->body_medium, text_max);
+                 hero.y + (int32_t)(THEME_FONT_TITLE + 0.5f) + 8,
+                 state->dialog.message, th->text_dim,
+                 THEME_FONT_BODY, text_max);
 
     /* The confirming action: an M3 filled button. */
     wm_rect_t btn = dialog_ok_rect(state);
     uint32_t btn_container = state->dialog.hover_ok
-        ? m3_state_layer(m3->primary, m3->on_primary, M3_STATE_HOVER)
-        : m3->primary;
+        ? color_mix(th->accent, th->on_accent, THEME_HOVER_PCT)
+        : th->accent;
     wm_canvas_fill_rounded(canvas, btn,
-        m3_shape_radius(M3_SHAPE_FULL, btn.w, btn.h), btn_container);
-    uint32_t label_w = wm_font_measure(&state->font, "OK", type->label_large);
+        wm_pill_radius(btn.w, btn.h), btn_container);
+    uint32_t label_w = wm_font_measure(&state->font, "OK", THEME_FONT_BODY);
     wm_font_draw(&state->font, canvas,
                  btn.x + (int32_t)(btn.w - label_w) / 2,
-                 btn.y + (int32_t)(btn.h - (uint32_t)type->label_large) / 2,
-                 "OK", m3->on_primary, type->label_large, btn.w);
+                 btn.y + (int32_t)(btn.h - (uint32_t)THEME_FONT_BODY) / 2,
+                 "OK", th->on_accent, THEME_FONT_BODY, btn.w);
 }

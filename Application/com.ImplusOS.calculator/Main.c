@@ -33,11 +33,11 @@
 #include <string.h>
 #include <math.h>
 
-#include "ImUI.h"
+#include "UI.h"
 #include "Serial.h"
 
-static imui_app_t    *g_app;
-static imui_widget_t *w_expr, *w_history, *w_status;
+static ui_app_t    *g_app;
+static ui_widget_t *w_expr, *w_history, *w_status;
 
 /* ------------------------------------------------------------- parser */
 
@@ -126,8 +126,8 @@ static double parse_expr(parser_t *ps)
 
 static void note(const char *text)
 {
-    imui_set_text(g_app, w_status, text);
-    imui_request_paint(g_app);
+    ui_set_text(w_status, text);
+    ui_redraw();
 }
 
 /* An integral result reads better as 21 than as 21.000000000, and a
@@ -153,7 +153,7 @@ static bool out_of_range(double v)
 
 static bool evaluate(void)
 {
-    const char *text = imui_get_text(w_expr);
+    const char *text = ui_get_text(w_expr);
     parser_t ps = { text, NULL };
 
     skip_ws(&ps);
@@ -181,81 +181,79 @@ static bool evaluate(void)
      * makes 16. */
     char line[256];
     snprintf(line, sizeof(line), "%s = %s", text, result);
-    imui_set_text(g_app, w_history, line);
-    imui_set_text(g_app, w_expr, result);
-    imui_request_paint(g_app);
+    ui_set_text(w_history, line);
+    ui_set_text(w_expr, result);
+    ui_redraw();
     return true;
 }
 
 /* ------------------------------------------------------------- keypad */
 
-/* ImUI drops the focus when any button is pressed, which would mean one
+/* The toolkit drops the focus when any button is pressed, which would mean one
  * click on the keypad and the keyboard stops reaching the expression box.
  * Every keypad action therefore hands the focus straight back. */
 static void focus_expr(void)
 {
-    g_app->focus = w_expr;
+    ui_focus(w_expr);
 }
 
 static void expr_append(const char *s)
 {
     char buf[512];
-    snprintf(buf, sizeof(buf), "%s%s", imui_get_text(w_expr), s);
-    imui_set_text(g_app, w_expr, buf);
+    snprintf(buf, sizeof(buf), "%s%s", ui_get_text(w_expr), s);
+    ui_set_text(w_expr, buf);
     focus_expr();
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void on_backspace(imui_app_t *a, imui_widget_t *w, void *u)
+static void on_backspace(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
-    const char *s = imui_get_text(w_expr);
+    (void)w;
+    const char *s = ui_get_text(w_expr);
     size_t n = strlen(s);
     if (n == 0) { focus_expr(); return; }
     char buf[512];
     memcpy(buf, s, n - 1u);
     buf[n - 1u] = '\0';
-    imui_set_text(g_app, w_expr, buf);
+    ui_set_text(w_expr, buf);
     focus_expr();
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
-static void on_key_press(imui_app_t *a, imui_widget_t *w, void *u)
+static void on_key_press(ui_widget_t *w)
 {
-    (void)a; (void)w;
-    expr_append((const char *)u);
+    expr_append((const char *)w->user);
 }
 
-static void on_clear(imui_app_t *a, imui_widget_t *w, void *u)
+static void on_clear(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
-    imui_set_text(g_app, w_expr, "");
-    imui_set_text(g_app, w_history, "");
+    (void)w;
+    ui_set_text(w_expr, "");
+    ui_set_text(w_history, "");
     focus_expr();
     note("クリアしました");
 }
 
-static void on_equals(imui_app_t *a, imui_widget_t *w, void *u)
+static void on_equals(ui_widget_t *w)
 {
-    (void)a; (void)w; (void)u;
+    (void)w;
     (void)evaluate();
     focus_expr();
 }
 
 /* "C" and "BS" on the edit row are actions rather than characters, so they
  * do not go through on_key_press. */
-static void on_edit_key(imui_app_t *a, imui_widget_t *w, void *u)
+static void on_edit_key(ui_widget_t *w)
 {
-    const char *key = (const char *)u;
-    if (key[0] == 'C' && key[1] == '\0') on_clear(a, w, NULL);
-    else on_backspace(a, w, NULL);
+    const char *key = (const char *)w->user;
+    if (key[0] == 'C' && key[1] == '\0') on_clear(w);
+    else on_backspace(w);
 }
 
-/* Enter reaches this through the textbox's on_submit; '=' would otherwise
+/* Enter reaches this through the textbox's on_action; '=' would otherwise
  * just be typed into the box, so the app takes it first. */
-static bool on_key(imui_app_t *a, const input_keyboard_event_t *ev)
+static bool on_key(const input_keyboard_event_t *ev)
 {
-    (void)a;
     if ((ev->modifiers & INPUT_KBD_MOD_CTRL) != 0u) return false;
     if (ev->ascii == '=') { (void)evaluate(); return true; }
     return false;
@@ -270,14 +268,14 @@ static bool on_key(imui_app_t *a, const input_keyboard_event_t *ev)
  * one another. */
 #define KEYPAD_ROW_H 52
 
-static void keypad_row(imui_widget_t *parent, const char *const *keys, uint32_t n,
-                       imui_cb_t cb)
+static void keypad_row(ui_widget_t *parent, const char *const *keys, uint32_t n,
+                       ui_cb_t cb)
 {
-    imui_widget_t *row = imui_container(parent, IMUI_ROW, 0, 6);
+    ui_widget_t *row = ui_row(parent, 0, 6);
     row->grow = 0; row->min_h = KEYPAD_ROW_H;
     for (uint32_t i = 0; i < n; ++i) {
-        imui_widget_t *b = imui_button(row, keys[i], IMUI_ICON_NONE,
-                                       cb, (void *)(uintptr_t)keys[i]);
+        ui_widget_t *b = ui_button(row, keys[i], UI_ICON_NONE,
+                                   cb, (void *)(uintptr_t)keys[i]);
         b->grow = 1;
         b->min_h = KEYPAD_ROW_H;
     }
@@ -288,34 +286,31 @@ int _start(void)
 {
     serial_write_string("[calculator] start\n");
 
-    g_app = imui_create(460, 660, "Calculator");
+    g_app = ui_create(460, 660, "Calculator");
     if (!g_app) {
         serial_write_string("[calculator] no window\n");
         for (;;) {}
     }
 
-    imui_widget_t *root = g_app->root;
-    root->kind = IMUI_COL; root->pad = 0; root->gap = 0;
+    ui_widget_t *root = g_app->root;
 
-    imui_widget_t *header = imui_container(root, IMUI_ROW, 16, 8);
-    header->grow = 0; header->min_h = 64; header->fill_bg = true;
-    imui_set_variant(header, IMUI_FILLED);
-    imui_widget_t *title = imui_set_type_role(imui_label(header, "計算機"),
-                                              IMUI_HEADLINE);
+    ui_widget_t *header = ui_bar(root, 64);
+    header->pad = 16; header->gap = 8;
+    ui_widget_t *title = ui_title(header, "計算機");
     title->grow = 1;
 
-    imui_widget_t *body = imui_container(root, IMUI_COL, 12, 10);
+    ui_widget_t *body = ui_col(root, 12, 10);
     body->grow = 1;
 
-    w_expr = imui_textbox(body, "");
+    w_expr = ui_textbox(body, "");
     w_expr->grow = 0;
     w_expr->min_h = 64;
-    w_expr->on_submit = on_equals;
+    w_expr->on_action = on_equals;
 
-    w_history = imui_set_type_role(imui_label(body, ""), IMUI_LABEL_SMALL);
+    w_history = ui_caption(body, "");
     w_history->grow = 0; w_history->min_h = 22;
 
-    imui_widget_t *pad = imui_container(body, IMUI_COL, 0, 6);
+    ui_widget_t *pad = ui_col(body, 0, 6);
     pad->grow = 1; pad->min_h = 0;
 
     /* Keypad, in the order every calculator has it: clear and the editing
@@ -333,21 +328,19 @@ int _start(void)
     keypad_row(pad, row_123,  4, on_key_press);
     keypad_row(pad, row_0dot, 4, on_key_press);
 
-    imui_widget_t *eq = imui_button(pad, "=", IMUI_ICON_NONE, on_equals, NULL);
-    imui_set_variant(eq, IMUI_FILLED);
+    ui_widget_t *eq = ui_button(pad, "=", UI_ICON_NONE, on_equals, NULL);
+    eq->primary = true;
     eq->grow = 0; eq->min_h = 56;
 
-    imui_widget_t *sb = imui_container(root, IMUI_ROW, 12, 0);
-    sb->grow = 0; sb->min_h = 32; sb->fill_bg = true;
-    imui_set_variant(sb, IMUI_FILLED);
-    w_status = imui_set_type_role(imui_label(sb, "Enter か = で計算します"),
-                                  IMUI_LABEL_SMALL);
+    ui_widget_t *sb = ui_bar(root, 32);
+    sb->pad = 12; sb->gap = 0;
+    w_status = ui_caption(sb, "Enter か = で計算します");
     w_status->grow = 1;
 
     g_app->on_key = on_key;
     /* The expression box is what the window is for, so it starts focused:
      * typing a digit before clicking anything has to work. */
-    g_app->focus = w_expr;
+    ui_focus(w_expr);
 
-    return imui_run(g_app);
+    ui_run();
 }

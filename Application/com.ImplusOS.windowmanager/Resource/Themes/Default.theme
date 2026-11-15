@@ -1,23 +1,14 @@
-; ImplusOS shell theme -- Material Design 3, light scheme.
+; ImplusOS shell theme.
 ;
-; The whole palette is generated from `seed`: five tonal palettes (primary,
-; secondary, tertiary, neutral, neutral-variant) plus M3's fixed error
-; palette, mapped onto the standard colour roles. Changing the seed retints
-; the entire desktop; nothing else here needs touching.
-;
-; A [Colors] section may override individual roles by their M3 name
-; (primary, surface_container_high, outline_variant, ...) for a hand-tuned
-; scheme. Overrides are applied after the seed, so they win.
+; The palette is a fixed light or dark set of neutrals plus one accent
+; colour (Userland/API/Source/Theme.h). Settings writes the user's choice to
+; /var/System/shell.theme, which is applied on top of this file.
 
-[Material]
-seed            = #6750A4
+accent          = #6750A4
 mode            = light
-type_scale      = 1.0
 
 [Metrics]
-; M3 "medium" shape on the window frame, level-3 elevation under it, and a
-; navigation bar sized for a row of 34px icon buttons.
 title_height    = 32
-corner_radius   = 12
+corner_radius   = 8
 shadow_size     = 8
 dock_height     = 40

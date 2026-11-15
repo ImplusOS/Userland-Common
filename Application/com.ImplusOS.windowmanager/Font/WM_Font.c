@@ -318,20 +318,6 @@ bool wm_font_init(wm_font_t *font, const char *path)
     return true;
 }
 
-void wm_font_destroy(wm_font_t *font)
-{
-    if (!font || !font->impl) return;
-    wm_font_impl_t *impl = (wm_font_impl_t *)font->impl;
-    for (uint32_t i = 0; i < WM_GLYPH_CACHE_SIZE; ++i)
-        if (impl->glyphs[i].bitmap) free(impl->glyphs[i].bitmap);
-    if (impl->face) FT_Done_Face(impl->face);
-    if (impl->library) FT_Done_FreeType(impl->library);
-    free(impl->buffer);
-    free(impl);
-    font->impl = NULL;
-    font->loaded = false;
-}
-
 uint32_t wm_font_measure(wm_font_t *font, const char *text, float pixel_height)
 {
     if (!font || !font->loaded || !text || pixel_height <= 0.0f) return 0u;

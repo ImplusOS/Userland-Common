@@ -18,14 +18,6 @@
 
 #define WM_POINTER_FRAME_THROTTLE_MS 16u
 
-typedef struct {
-    wm_msg_header_t header;
-    input_mouse_event_t event;
-    uint32_t absolute_x;
-    uint32_t absolute_y;
-    uint64_t sequence;
-} wm_mouse_event_message_t;
-
 static wm_rect_t screen_bounds(const wm_state_t *state)
 {
     return (wm_rect_t){0, 0, state->compositor.framebuffer_width,
@@ -846,25 +838,6 @@ static void handle_mouse_event(wm_state_t *state,
     if (!consumed && !state->launcher_open && !state->notification_center_open &&
         !state->wifi_panel.open)
         route_mouse(state, event);
-}
-
-void wm_input_handle_mouse(wm_state_t *state, const ipc_message_t *message)
-{
-    if (!state || !message ||
-        message->size < sizeof(wm_msg_header_t) + sizeof(input_mouse_event_t)) return;
-    const input_mouse_event_t *event =
-        (const input_mouse_event_t *)(message->data + sizeof(wm_msg_header_t));
-
-    if (message->size >= sizeof(wm_mouse_event_message_t)) {
-        const wm_mouse_event_message_t *ext =
-            (const wm_mouse_event_message_t *)message->data;
-        handle_mouse_event(state, &ext->event, true,
-                           ext->absolute_x, ext->absolute_y,
-                           ext->sequence);
-        return;
-    }
-
-    handle_mouse_event(state, event, false, 0u, 0u, 0u);
 }
 
 static int32_t clamp_delta(int32_t value)

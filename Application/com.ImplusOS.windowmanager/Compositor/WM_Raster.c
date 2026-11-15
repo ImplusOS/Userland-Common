@@ -26,27 +26,6 @@ uint32_t wm_color_blend(uint32_t background, uint32_t foreground)
     return (out_alpha << 24u) | (red << 16u) | (green << 8u) | blue;
 }
 
-uint32_t wm_color_lerp(uint32_t a, uint32_t b, uint32_t numerator, uint32_t denominator)
-{
-    if (denominator == 0u || numerator == 0u) return a;
-    if (numerator >= denominator) return b;
-    uint64_t inverse = (uint64_t)denominator - numerator;
-    uint64_t round = denominator / 2u;
-    uint32_t alpha = (uint32_t)((((uint64_t)(a >> 24u) * inverse) +
-                                 ((uint64_t)(b >> 24u) * numerator) + round) /
-                                denominator);
-    uint32_t red = (uint32_t)((((uint64_t)((a >> 16u) & 0xFFu) * inverse) +
-                               ((uint64_t)((b >> 16u) & 0xFFu) * numerator) + round) /
-                              denominator);
-    uint32_t green = (uint32_t)((((uint64_t)((a >> 8u) & 0xFFu) * inverse) +
-                                 ((uint64_t)((b >> 8u) & 0xFFu) * numerator) + round) /
-                                denominator);
-    uint32_t blue = (uint32_t)((((uint64_t)(a & 0xFFu) * inverse) +
-                                ((uint64_t)(b & 0xFFu) * numerator) + round) /
-                               denominator);
-    return (alpha << 24u) | (red << 16u) | (green << 8u) | blue;
-}
-
 void wm_canvas_init(wm_canvas_t *canvas, uint32_t *pixels,
                     uint32_t width, uint32_t height, uint32_t stride)
 {
@@ -268,20 +247,15 @@ void wm_canvas_stroke_rounded(wm_canvas_t *canvas, wm_rect_t rect,
     }
 }
 
-void wm_canvas_elevation_shadow(wm_canvas_t *canvas, wm_rect_t rect,
-                                uint32_t radius, m3_elevation_t level,
-                                uint32_t shadow_color, uint8_t opacity)
+void wm_canvas_shadow(wm_canvas_t *canvas, wm_rect_t rect, uint32_t radius,
+                      uint32_t spread, uint32_t shadow_color, uint8_t opacity)
 {
-    uint32_t spread = m3_shadow_spread(level);
     if (!canvas || spread == 0u || opacity == 0u) return;
-    int32_t offset_y = m3_shadow_offset_y(level);
+    int32_t offset_y = (int32_t)(spread * 2u / 5u);
     uint32_t base_alpha = shadow_color >> 24u;
     if (base_alpha == 0u) return;
 
-    /* M3's key light: a soft ramp under the component, tightest at its
-     * edge. Every raised surface in the shell -- windows, menus, dialogs,
-     * sheets, notification cards -- gets its shadow from here, so they all
-     * sit at the same apparent height for a given level. */
+    /* A soft ramp under the component, densest at its edge. */
     for (uint32_t layer = spread; layer > 0u; --layer) {
         uint32_t strength = ((spread - layer + 1u) * 40u) / spread;
         strength = (strength * base_alpha) / 255u;
@@ -292,18 +266,6 @@ void wm_canvas_elevation_shadow(wm_canvas_t *canvas, wm_rect_t rect,
                           rect.w + layer * 2u, rect.h + layer * 2u};
         wm_canvas_fill_rounded(canvas, halo, radius + layer,
             (shadow_color & 0x00FFFFFFu) | ((strength & 0xFFu) << 24u));
-    }
-}
-
-void wm_canvas_gradient_vertical(wm_canvas_t *canvas, wm_rect_t rect,
-                                 uint32_t top, uint32_t bottom)
-{
-    if (!canvas || rect.h == 0u) return;
-    wm_rect_t visible = wm_rect_intersection(rect, canvas->clip);
-    for (uint32_t row = 0; row < visible.h; ++row) {
-        uint32_t local_y = (uint32_t)(visible.y + (int32_t)row - rect.y);
-        uint32_t color = wm_color_lerp(top, bottom, local_y, rect.h > 1u ? rect.h - 1u : 1u);
-        wm_canvas_fill(canvas, (wm_rect_t){visible.x, visible.y + (int32_t)row, visible.w, 1u}, color);
     }
 }
 
@@ -549,19 +511,5 @@ void wm_canvas_blit_scaled(wm_canvas_t *canvas, wm_rect_t destination,
             wm_canvas_put(canvas, px, py, color);
         }
     }
-}
-
-void wm_canvas_draw_icon(wm_canvas_t *canvas, wm_rect_t destination,
-                         const wm_icon_image_t *icon, uint8_t opacity,
-                         uint32_t corner_radius, uint32_t fallback_color)
-{
-    if (!canvas || destination.w == 0u || destination.h == 0u || opacity == 0u) return;
-    if (icon && icon->pixels && icon->width != 0u && icon->height != 0u) {
-        wm_canvas_blit_scaled(canvas, destination, icon->pixels,
-                              icon->width, icon->height, opacity, corner_radius);
-        return;
-    }
-    uint32_t alpha = ((fallback_color >> 24u) * (uint32_t)opacity + 127u) / 255u;
-    wm_canvas_fill(canvas, destination, (fallback_color & 0x00FFFFFFu) | (alpha << 24u));
 }
 

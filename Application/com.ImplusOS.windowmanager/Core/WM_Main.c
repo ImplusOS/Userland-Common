@@ -286,15 +286,11 @@ void wm_service_init(wm_state_t *state)
     wm_event_queue_init(&state->event_queue);
     wm_theme_set_defaults(&state->theme);
 
-    /* The user's own theme first, then the M3 light scheme shipped with the
-     * image. Failing both, wm_theme_set_defaults() above has already left a
-     * complete M3 baseline theme in place, so the shell never draws with an
-     * empty palette. */
-    if (!wm_theme_load(&state->theme, "/var/System/shell.theme")) {
-        (void)wm_theme_load(&state->theme,
-            "/Userland/com.ImplusOS.windowmanager"
-            "/Resource/Themes/Material.theme");
-    }
+    /* The shipped theme, then the user's choice (written by Settings) on
+     * top of it. If neither can be read the defaults above stand. */
+    (void)wm_theme_load(&state->theme,
+        "/Userland/com.ImplusOS.windowmanager/Resource/Themes/Default.theme");
+    (void)wm_theme_load(&state->theme, "/var/System/shell.theme");
 
     (void)wm_assets_init_metadata(&state->assets);
     (void)wm_assets_load_logo(&state->assets);

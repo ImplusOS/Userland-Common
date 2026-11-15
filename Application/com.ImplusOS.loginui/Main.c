@@ -70,7 +70,7 @@ static void *ui_realloc_sized(void *p, size_t oldsz, size_t newsz) {
 #include "Header/stb_image.h"
 #pragma GCC diagnostic pop
 
-#include "Material.h"
+#include "Theme.h"
 
 /* ------------------------------------------------------------- resources */
 
@@ -80,18 +80,16 @@ static void *ui_realloc_sized(void *p, size_t oldsz, size_t newsz) {
 #define MD_ICON_DIR      "/Userland/com.ImplusOS.windowmanager/Resource/Icons/md/"
 
 /*
- * The login screen is drawn in the same Material Design 3 scheme the
- * desktop behind it uses -- read from the window manager's theme file, so
- * signing in and the session that follows look like one system rather than
- * two.
+ * The login screen is drawn with the desktop theme (Theme.h), read from the
+ * same files the window manager uses, so signing in and the session that
+ * follows look like one system.
  *
  * Everything here works in 24-bit RGB with a separate alpha argument, so
- * the roles are unwrapped with M3_RGB() at the point of use.
+ * colours are unwrapped with RGB() at the point of use.
  */
-#define M3_RGB(role) ((role) & 0x00FFFFFFu)
+#define RGB(c) ((c) & 0x00FFFFFFu)
 
-static m3_scheme_t    g_m3;
-static m3_typescale_t g_type;
+static theme_t g_theme;
 
 #define USER_DB_DIR      "/var/System"
 #define USER_DB_FILE     "/var/System/users.db"
@@ -342,29 +340,21 @@ static void paint_backdrop(void) {
     if (g_wallpaper)
         memcpy(g_fb, g_wallpaper, (size_t)g_w * (size_t)g_h * 4);
     else
-        fill_rect(0, 0, g_w, g_h, M3_RGB(g_m3.surface_dim), 255);
+        fill_rect(0, 0, g_w, g_h, RGB(g_theme.bg), 255);
 }
 
 /* ------------------------------------------------------------- avatar */
 
 /*
- * Deterministic per-user avatar colour, taken from the scheme's own key
- * palettes rather than from a list of nice colours: users stay
- * distinguishable, and they stay distinguishable in whatever the desktop is
- * themed to. Returns the container tone; `on` receives what to write on it.
+ * Deterministic per-user avatar colour: the accent and two fixed hues, each
+ * tinted onto the surface, so users stay distinguishable in either mode.
+ * Returns the fill; `on` receives what to write on it.
  */
 static uint32_t accent_for(uint32_t idx, uint32_t *on) {
-    const uint32_t container[] = {
-        g_m3.primary_container, g_m3.tertiary_container,
-        g_m3.secondary_container,
-    };
-    const uint32_t on_container[] = {
-        g_m3.on_primary_container, g_m3.on_tertiary_container,
-        g_m3.on_secondary_container,
-    };
-    uint32_t slot = idx % (sizeof(container) / sizeof(container[0]));
-    if (on) *on = M3_RGB(on_container[slot]);
-    return M3_RGB(container[slot]);
+    const uint32_t hue[] = { g_theme.accent, 0xFF00897Bu, 0xFFC2185Bu };
+    uint32_t slot = idx % (sizeof(hue) / sizeof(hue[0]));
+    if (on) *on = RGB(g_theme.text);
+    return RGB(color_mix(g_theme.surface, hue[slot], g_theme.dark ? 45u : 30u));
 }
 
 static void draw_avatar(int cx, int cy, int r, uint32_t accent, uint32_t on,
@@ -671,7 +661,7 @@ static void mouse_poll(mouse_t *m) {
     }
 }
 
-/* the shared external Material cursor asset (white RGBA, alpha = coverage) */
+/* the shared cursor asset (white RGBA, alpha = coverage) */
 static uint32_t *g_cursor_px;
 static int       g_cursor_w, g_cursor_h, g_cursor_tried;
 
@@ -733,7 +723,7 @@ static void draw_cursor(int x, int y) {
         for (int i = 0; i < 8; ++i)
             blit_sprite(g_cursor_px, g_cursor_w, g_cursor_h,
                         x + off[i][0], y + off[i][1], w, h,
-                        M3_RGB(g_m3.scrim), 220);
+                        RGB(0xFF000000u), 220);
         blit_sprite(g_cursor_px, g_cursor_w, g_cursor_h, x, y, w, h, 0xFFFFFF, 255);
         return;
     }
@@ -766,30 +756,29 @@ static void field_key(field_t *f, const input_keyboard_event_t *ev) {
     }
 }
 
-/* An M3 filled text field: a surface-container-highest box rounded at the
- * top and square at the bottom, with an indicator line that turns primary
+/* A text field: a box with an underline that turns the accent colour
  * while the field has the keyboard. */
 static void draw_field(int x, int y, int w, int h, const field_t *f, bool focus) {
-    fill_round_rect(x, y, w, h, M3_SHAPE_EXTRA_SMALL,
-                    M3_RGB(g_m3.surface_container_highest), 255);
+    fill_round_rect(x, y, w, h, THEME_RADIUS_SMALL,
+                    RGB(g_theme.surface_alt), 255);
     fill_rect(x, y + h - (focus ? 2 : 1), w, focus ? 2 : 1,
-              M3_RGB(focus ? g_m3.primary : g_m3.on_surface_variant), 255);
+              RGB(focus ? g_theme.accent : g_theme.text_dim), 255);
     int tx = x + 16, ty = y + h / 2;
-    float px_size = g_type.body_large;
+    float px_size = THEME_FONT_LARGE;
     if (f->hidden) {
         int dots = (int)f->len, dx = tx;
         for (int i = 0; i < dots && dx < x + w - 16; ++i, dx += 14)
-            fill_circle(dx + 4, ty, 4, M3_RGB(g_m3.on_surface), 255);
+            fill_circle(dx + 4, ty, 4, RGB(g_theme.text), 255);
         if (focus)
-            fill_rect(dx + 1, y + 10, 2, h - 22, M3_RGB(g_m3.primary), 255);
+            fill_rect(dx + 1, y + 10, 2, h - 22, RGB(g_theme.accent), 255);
     } else {
         char tmp[130];
         strncpy(tmp, f->buf, sizeof(tmp) - 1); tmp[sizeof(tmp) - 1] = '\0';
         draw_text_top(tx, y + (h - (int)px_size - 4) / 2, tmp, px_size,
-                      M3_RGB(g_m3.on_surface));
+                      RGB(g_theme.text));
         if (focus) {
             int cw = text_width(tmp, scale_for(px_size));
-            fill_rect(tx + cw + 1, y + 10, 2, h - 22, M3_RGB(g_m3.primary), 255);
+            fill_rect(tx + cw + 1, y + 10, 2, h - 22, RGB(g_theme.accent), 255);
         }
     }
 }
@@ -801,11 +790,9 @@ typedef enum { SCR_PICK, SCR_PASSWORD, SCR_CREATE } screen_t;
 int _start(void);
 
 int _start(void) {
-    /* Same scheme the window manager will come up in, from the same
-     * theme file. */
-    m3_load_desktop_theme(&g_m3, &g_type);
+    /* The theme the window manager will come up in, from the same files. */
+    theme_load_desktop(&g_theme);
 
-    graphics_init(0);
     g_fb = (uint32_t *)sys_get_display_framebuffer();
     g_w = (int)get_display_width();
     g_h = (int)get_display_height();
@@ -919,12 +906,12 @@ int _start(void) {
                            mouse.y >= ry && mouse.y <= ry + row_h - 8;
                 bool active = (scr == SCR_PASSWORD && (int)i == sel);
                 /* The rows sit on the wallpaper, which has no tone to
-                 * contrast against, so M3's answer applies: a translucent
-                 * surface plate and a scrim shadow under the name. */
+                 * contrast against: a translucent surface plate and a dark
+                 * shadow under the name. */
                 if (hov || active) {
                     fill_round_rect(list_x - 10, ry, rw, row_h - 8,
                                     (row_h - 8) / 2,
-                                    M3_RGB(g_m3.surface_bright),
+                                    RGB(g_theme.surface),
                                     active ? 60 : 34);
                 }
                 uint32_t on_avatar = 0;
@@ -933,10 +920,10 @@ int _start(void) {
                             g_users[i].name, 22.0f);
                 if (g_font_ok) {
                     draw_text_top(list_x + av_r * 2 + 17, ry + (row_h - 8) / 2 - 9,
-                                  g_users[i].name, g_type.title_medium,
-                                  M3_RGB(g_m3.scrim));
+                                  g_users[i].name, THEME_FONT_LARGE,
+                                  RGB(0xFF000000u));
                     draw_text_top(list_x + av_r * 2 + 16, ry + (row_h - 8) / 2 - 10,
-                                  g_users[i].name, g_type.title_medium, 0xFFFFFF);
+                                  g_users[i].name, THEME_FONT_LARGE, 0xFFFFFF);
                 }
                 if (hov) hover_row = (int)i;
             }
@@ -945,19 +932,19 @@ int _start(void) {
             bool ah = mouse.x >= list_x - 10 && mouse.x <= list_x - 10 + 300 &&
                       mouse.y >= ay && mouse.y <= ay + row_h - 8;
             if (ah) fill_round_rect(list_x - 10, ay, 300, row_h - 8, (row_h - 8) / 2,
-                                    M3_RGB(g_m3.surface_bright), 34);
+                                    RGB(g_theme.surface), 34);
             fill_circle(list_x + av_r, ay + (row_h - 8) / 2, av_r,
-                        M3_RGB(g_m3.surface_container_highest), 255);
+                        RGB(g_theme.surface_alt), 255);
             if (g_font_ok) {
                 float sc = scale_for(26.0f);
                 draw_text(list_x + av_r - text_width("+", sc) / 2,
                           ay + (row_h - 8) / 2 + 9, "+", sc,
-                          M3_RGB(g_m3.on_surface_variant));
+                          RGB(g_theme.text_dim));
                 draw_text_top(list_x + av_r * 2 + 17, ay + (row_h - 8) / 2 - 8,
-                              "新規ユーザー", g_type.title_medium,
-                              M3_RGB(g_m3.scrim));
+                              "新規ユーザー", THEME_FONT_LARGE,
+                              RGB(0xFF000000u));
                 draw_text_top(list_x + av_r * 2 + 16, ay + (row_h - 8) / 2 - 9,
-                              "新規ユーザー", g_type.title_medium, 0xFFFFFF);
+                              "新規ユーザー", THEME_FONT_LARGE, 0xFFFFFF);
             }
             add_hover = ah ? 1 : 0;
         }
@@ -966,13 +953,12 @@ int _start(void) {
         if (scr == SCR_PASSWORD || scr == SCR_CREATE) {
             int cw = 420, ch = (scr == SCR_CREATE) ? 440 : 312;
             int cx = (g_w - cw) / 2, cy = (g_h - ch) / 2;
-            /* An M3 dialog: an extra-large shape on a surface container,
-             * with the outline M3 gives a container rather than a shadow
-             * this code has no way to cast. */
-            fill_round_rect(cx, cy, cw, ch, M3_SHAPE_EXTRA_LARGE,
-                            M3_RGB(g_m3.surface_container_high), 255);
-            stroke_round_rect(cx, cy, cw, ch, M3_SHAPE_EXTRA_LARGE,
-                              M3_RGB(g_m3.outline_variant), 255);
+            /* The dialog: a rounded surface with an outline (this code
+             * has no way to cast a shadow). */
+            fill_round_rect(cx, cy, cw, ch, THEME_RADIUS_LARGE,
+                            RGB(g_theme.surface), 255);
+            stroke_round_rect(cx, cy, cw, ch, THEME_RADIUS_LARGE,
+                              RGB(g_theme.border), 255);
 
             if (scr == SCR_PASSWORD) {
                 uint32_t on_avatar = 0;
@@ -980,57 +966,56 @@ int _start(void) {
                             accent_for((uint32_t)sel, &on_avatar), on_avatar,
                             g_users[sel].name, 30.0f);
                 if (g_font_ok) {
-                    float ns = scale_for(g_type.headline_small);
+                    float ns = scale_for(THEME_FONT_TITLE);
                     draw_text(cx + (cw - text_width(g_users[sel].name, ns)) / 2, cy + 142,
-                              g_users[sel].name, ns, M3_RGB(g_m3.on_surface));
-                    draw_text_top(cx + 40, cy + 158, "パスワード", g_type.label_medium,
-                                  M3_RGB(g_m3.on_surface_variant));
+                              g_users[sel].name, ns, RGB(g_theme.text));
+                    draw_text_top(cx + 40, cy + 158, "パスワード", THEME_FONT_SMALL,
+                                  RGB(g_theme.text_dim));
                 }
                 draw_field(cx + 40, cy + 178, cw - 80, 56, &fpw, true);
                 if (g_font_ok)
                     draw_text_top(cx + 40, cy + 244, "Enter でログイン / Esc で戻る",
-                                  g_type.label_small, M3_RGB(g_m3.on_surface_variant));
+                                  THEME_FONT_SMALL, RGB(g_theme.text_dim));
                 if (status[0] && g_font_ok)
-                    draw_text_top(cx + 40, cy + 266, status, g_type.label_small,
-                                  M3_RGB(g_m3.error));
+                    draw_text_top(cx + 40, cy + 266, status, THEME_FONT_SMALL,
+                                  RGB(g_theme.danger));
             } else {
                 if (g_font_ok) {
-                    float ts = scale_for(g_type.headline_small);
+                    float ts = scale_for(THEME_FONT_TITLE);
                     draw_text(cx + (cw - text_width("ようこそ ImplusOS へ", ts)) / 2, cy + 52,
-                              "ようこそ ImplusOS へ", ts, M3_RGB(g_m3.on_surface));
+                              "ようこそ ImplusOS へ", ts, RGB(g_theme.text));
                     draw_text_top(cx + 40, cy + 66, "最初のユーザーを作成します",
-                                  g_type.body_small, M3_RGB(g_m3.on_surface_variant));
+                                  THEME_FONT_SMALL, RGB(g_theme.text_dim));
 
-                    draw_text_top(cx + 40, cy + 100, "ユーザー名", g_type.label_small,
-                                  M3_RGB(g_m3.on_surface_variant));
+                    draw_text_top(cx + 40, cy + 100, "ユーザー名", THEME_FONT_SMALL,
+                                  RGB(g_theme.text_dim));
                 }
                 draw_field(cx + 40, cy + 118, cw - 80, 56, &fname, create_focus == 0);
                 if (g_font_ok) draw_text_top(cx + 40, cy + 184, "パスワード",
-                                             g_type.label_small,
-                                             M3_RGB(g_m3.on_surface_variant));
+                                             THEME_FONT_SMALL,
+                                             RGB(g_theme.text_dim));
                 draw_field(cx + 40, cy + 202, cw - 80, 56, &fpw, create_focus == 1);
                 if (g_font_ok) draw_text_top(cx + 40, cy + 268, "パスワード（確認）",
-                                             g_type.label_small,
-                                             M3_RGB(g_m3.on_surface_variant));
+                                             THEME_FONT_SMALL,
+                                             RGB(g_theme.text_dim));
                 draw_field(cx + 40, cy + 286, cw - 80, 56, &fpw2, create_focus == 2);
 
-                /* The one action this screen is asking for: an M3 filled
-                 * button, full shape, primary. */
+                /* The one action this screen is asking for: a pill
+                 * button in the accent colour. */
                 int by = cy + 356;
                 bool bhov = mouse.x >= cx + 40 && mouse.x <= cx + cw - 40 &&
                             mouse.y >= by && mouse.y <= by + 40;
-                uint32_t btn = bhov ? m3_state_layer(g_m3.primary, g_m3.on_primary,
-                                                     M3_STATE_HOVER)
-                                    : g_m3.primary;
-                fill_round_rect(cx + 40, by, cw - 80, 40, 20, M3_RGB(btn), 255);
+                uint32_t btn = bhov ? color_mix(g_theme.accent, g_theme.on_accent, THEME_HOVER_PCT)
+                                    : g_theme.accent;
+                fill_round_rect(cx + 40, by, cw - 80, 40, 20, RGB(btn), 255);
                 if (g_font_ok)
                     draw_text(cx + (cw - text_width("作成してログイン",
-                                                    scale_for(g_type.label_large))) / 2,
-                              by + 26, "作成してログイン", scale_for(g_type.label_large),
-                              M3_RGB(g_m3.on_primary));
+                                                    scale_for(THEME_FONT_BODY))) / 2,
+                              by + 26, "作成してログイン", scale_for(THEME_FONT_BODY),
+                              RGB(g_theme.on_accent));
                 if (status[0] && g_font_ok)
-                    draw_text_top(cx + 40, cy + 406, status, g_type.label_small,
-                                  M3_RGB(g_m3.error));
+                    draw_text_top(cx + 40, cy + 406, status, THEME_FONT_SMALL,
+                                  RGB(g_theme.danger));
 
                 if (mouse.clicked && bhov) {
                     /* synthesize an Enter on the confirm field */

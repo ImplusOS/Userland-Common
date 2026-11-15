@@ -23,4 +23,4 @@ FastFetch|/Userland/FastFetch/FastFetch.ELF|FF|0|システム情報表示
 Serial Monitor|/Userland/com.ImplusOS.serialmonitor/com.ImplusOS.serialmonitor.ELF|SM|0|COM1 デバッグ出力
 Settings|/Userland/com.ImplusOS.settings/com.ImplusOS.settings.ELF|ST|0|配色とシステム情報
 Calculator|/Userland/com.ImplusOS.calculator/com.ImplusOS.calculator.ELF|Ca|7|式で計算する電卓
-Process Manager|/Userland/com.ImplusOS.processmanager/com.ImplusOS.processmanager.ELF|PM|0|実行中のプロセスを確認して終了する
+Task Manager|/Userland/com.ImplusOS.taskmanager/com.ImplusOS.taskmanager.ELF|TM|0|プロセス・パフォーマンス・起動時間を確認する

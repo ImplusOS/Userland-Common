@@ -149,85 +149,81 @@ static const char *status_line(const wm_state_t *state, char *buf, size_t buf_le
 static void draw_text_button(wm_state_t *state, wm_canvas_t *canvas,
                              wm_rect_t box, const char *label, uint32_t on_color)
 {
-    const m3_typescale_t *type = &state->theme.type;
-    uint32_t label_w = wm_font_measure(&state->font, label, type->label_large);
+    uint32_t label_w = wm_font_measure(&state->font, label, THEME_FONT_BODY);
     wm_font_draw(&state->font, canvas,
                  box.x + ((int32_t)box.w - (int32_t)label_w) / 2,
-                 box.y + ((int32_t)box.h - (int32_t)type->label_large) / 2,
-                 label, on_color, type->label_large, box.w);
+                 box.y + ((int32_t)box.h - (int32_t)THEME_FONT_BODY) / 2,
+                 label, on_color, THEME_FONT_BODY, box.w);
 }
 
 static void draw_header(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t panel)
 {
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
+    const theme_t *th = &state->theme.color;
     bool connected = is_connected(state);
 
     wm_rect_t badge = {panel.x + 20, panel.y + 18, 40u, 40u};
     wm_canvas_fill_rounded(canvas, badge,
-        m3_shape_radius(M3_SHAPE_FULL, badge.w, badge.h),
-        connected ? m3->primary_container : m3->surface_container_high);
+        wm_pill_radius(badge.w, badge.h),
+        connected ? th->accent_soft : th->surface);
     wm_icon_draw(canvas, (wm_rect_t){badge.x + 10, badge.y + 10, 20u, 20u},
                  connected ? WM_ICON_WIFI : WM_ICON_WIFI_OFF,
-                 connected ? m3->on_primary_container : m3->on_surface_variant);
+                 connected ? th->text : th->text_dim);
 
     uint32_t text_max = panel.w > 140u ? panel.w - 140u : 0u;
     wm_font_draw(&state->font, canvas, panel.x + 72, panel.y + 18,
-                 "Wi-Fi", m3->on_surface, type->title_medium, text_max);
+                 "Wi-Fi", th->text, THEME_FONT_LARGE, text_max);
 
     char buf[64];
     const char *line = status_line(state, buf, sizeof(buf));
     wm_font_draw(&state->font, canvas, panel.x + 72,
-                 panel.y + 18 + (int32_t)(type->title_medium + 0.5f) + 4,
-                 line, m3->on_surface_variant, type->label_medium, text_max);
+                 panel.y + 18 + (int32_t)(THEME_FONT_LARGE + 0.5f) + 4,
+                 line, th->text_dim, THEME_FONT_SMALL, text_max);
 
     /* Rescanning is an M3 icon button; while a scan is running it wears the
      * active indicator rather than changing its glyph. */
     wm_rect_t scan_btn = scan_button_rect(panel);
     bool scanning = state->wifi_panel.scan_active;
     wm_canvas_fill_rounded(canvas, scan_btn,
-        m3_shape_radius(M3_SHAPE_FULL, scan_btn.w, scan_btn.h),
-        scanning ? m3->secondary_container : m3->surface_container_high);
+        wm_pill_radius(scan_btn.w, scan_btn.h),
+        scanning ? th->accent_soft : th->surface);
     wm_icon_draw(canvas,
         (wm_rect_t){scan_btn.x + 10, scan_btn.y + 10, 20u, 20u},
         WM_ICON_SEARCH,
-        scanning ? m3->on_secondary_container : m3->on_surface_variant);
+        scanning ? th->text : th->text_dim);
 
     wm_canvas_fill(canvas,
         (wm_rect_t){panel.x + 16, panel.y + (int32_t)WIFI_HEADER_H - 8,
                     panel.w - 32u, 1u},
-        m3->outline_variant);
+        th->border);
 }
 
 static void draw_connected_card(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t card)
 {
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
+    const theme_t *th = &state->theme.color;
     wm_canvas_fill_rounded(canvas, card,
-        m3_shape_radius(M3_SHAPE_MEDIUM, card.w, card.h),
-        m3->primary_container);
+        THEME_RADIUS,
+        th->accent_soft);
     draw_signal_bars(canvas, card.x + 16, card.y + (int32_t)card.h / 2 + 4,
                      state->wifi_panel.status.state == WIFI_STATE_ASSOCIATED ? -40 : -80,
-                     m3->on_primary_container,
-                     m3_state_layer(m3->primary_container,
-                                       m3->on_primary_container, 24u));
+                     th->text,
+                     color_mix(th->accent_soft,
+                                       th->text, 24u));
     wm_font_draw(&state->font, canvas, card.x + 48, card.y + 12,
-                 state->wifi_panel.status.ssid, m3->on_primary_container,
-                 type->body_medium, card.w > 150u ? card.w - 150u : 0u);
+                 state->wifi_panel.status.ssid, th->text,
+                 THEME_FONT_BODY, card.w > 150u ? card.w - 150u : 0u);
     wm_font_draw(&state->font, canvas, card.x + 48,
-                 card.y + 12 + (int32_t)(type->body_medium + 0.5f) + 4,
-                 "接続済み", m3->on_primary_container, type->label_small,
+                 card.y + 12 + (int32_t)(THEME_FONT_BODY + 0.5f) + 4,
+                 "接続済み", th->text, THEME_FONT_SMALL,
                  card.w > 150u ? card.w - 150u : 0u);
     draw_text_button(state, canvas,
                      (wm_rect_t){card.x + (int32_t)card.w - 96, card.y + 10,
                                  86u, card.h > 20u ? card.h - 20u : card.h},
-                     "切断", m3->primary);
+                     "切断", th->accent);
 }
 
 static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
 {
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
+    const theme_t *th = &state->theme.color;
     wm_rect_t list = list_start(body, state);
     wm_rect_t old_clip = canvas->clip;
     wm_canvas_set_clip(canvas, wm_rect_intersection(old_clip, list));
@@ -237,7 +233,7 @@ static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
         const char *msg = p->scan_active ? "スキャン中..."
                                          : "ネットワークが見つかりません";
         wm_font_draw(&state->font, canvas, list.x + 8, list.y + 20,
-                     msg, m3->on_surface_variant, type->body_medium,
+                     msg, th->text_dim, THEME_FONT_BODY,
                      list.w > 16u ? list.w - 16u : 0u);
     } else {
         for (uint32_t i = 0u; i < p->result_count; ++i) {
@@ -246,22 +242,22 @@ static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
             const wifi_scan_result_t *r = &p->results[i];
             bool is_current = is_connected(state) &&
                 strncmp(r->ssid, p->status.ssid, sizeof(r->ssid)) == 0;
-            uint32_t container = is_current ? m3->secondary_container
-                                            : m3->surface_container_high;
-            uint32_t on_container = is_current ? m3->on_secondary_container
-                                               : m3->on_surface;
+            uint32_t container = is_current ? th->accent_soft
+                                            : th->surface;
+            uint32_t on_container = is_current ? th->text
+                                               : th->text;
             wm_canvas_fill_rounded(canvas, row,
-                m3_shape_radius(M3_SHAPE_FULL, row.w, row.h), container);
+                wm_pill_radius(row.w, row.h), container);
             draw_signal_bars(canvas, row.x + 16, row.y + (int32_t)row.h / 2 + 5,
-                             r->rssi_dbm, on_container, m3->outline_variant);
+                             r->rssi_dbm, on_container, th->border);
             wm_font_draw(&state->font, canvas, row.x + 48,
-                         row.y + ((int32_t)row.h - (int32_t)type->body_medium) / 2 - 1,
-                         r->ssid, on_container, type->body_medium,
+                         row.y + ((int32_t)row.h - (int32_t)THEME_FONT_BODY) / 2 - 1,
+                         r->ssid, on_container, THEME_FONT_BODY,
                          row.w > 92u ? row.w - 92u : 0u);
             if (r->security != WIFI_SECURITY_OPEN) {
                 draw_lock_glyph(canvas, row.x + (int32_t)row.w - 24,
                                 row.y + (int32_t)row.h / 2,
-                                is_current ? on_container : m3->on_surface_variant);
+                                is_current ? on_container : th->text_dim);
             }
         }
     }
@@ -270,93 +266,90 @@ static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
 
 static void draw_password_view(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
 {
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
+    const theme_t *th = &state->theme.color;
     const wm_wifi_panel_t *p = &state->wifi_panel;
     if (p->selected_index < 0 || (uint32_t)p->selected_index >= p->result_count) return;
     const wifi_scan_result_t *r = &p->results[p->selected_index];
 
     wm_rect_t back = pw_back_rect(body);
     wm_icon_draw(canvas, (wm_rect_t){back.x, back.y + 2, 20u, 20u},
-                 WM_ICON_ARROW_BACK, m3->on_surface_variant);
+                 WM_ICON_ARROW_BACK, th->text_dim);
     wm_font_draw(&state->font, canvas, back.x + 26, back.y + 4,
-                 "戻る", m3->on_surface_variant, type->label_large,
+                 "戻る", th->text_dim, THEME_FONT_BODY,
                  back.w > 26u ? back.w - 26u : 0u);
 
     wm_font_draw(&state->font, canvas, body.x, body.y + 32,
-                 r->ssid, m3->on_surface, type->title_medium, body.w);
+                 r->ssid, th->text, THEME_FONT_LARGE, body.w);
 
     /* An M3 filled text field: a container with a square-ish top, an
      * indicator line along the bottom that turns primary on focus. */
     wm_rect_t field = pw_field_rect(body);
     wm_canvas_fill_shape(canvas, field,
-        M3_SHAPE_EXTRA_SMALL, M3_SHAPE_EXTRA_SMALL, 0u, 0u,
-        m3->surface_container_highest);
+        THEME_RADIUS_SMALL, THEME_RADIUS_SMALL, 0u, 0u,
+        th->surface_alt);
     char masked[WM_WIFI_PASSWORD_MAX + 1u];
     uint32_t n = p->password_len < WM_WIFI_PASSWORD_MAX ? p->password_len : WM_WIFI_PASSWORD_MAX;
     for (uint32_t i = 0u; i < n; ++i) masked[i] = '*';
     masked[n] = '\0';
     const char *display = n > 0u ? masked : "パスワード";
-    uint32_t tc = n > 0u ? m3->on_surface : m3->on_surface_variant;
-    int32_t text_y = field.y + ((int32_t)field.h - (int32_t)type->body_large) / 2 - 1;
+    uint32_t tc = n > 0u ? th->text : th->text_dim;
+    int32_t text_y = field.y + ((int32_t)field.h - (int32_t)THEME_FONT_LARGE) / 2 - 1;
     wm_font_draw(&state->font, canvas, field.x + 16, text_y,
-                 display, tc, type->body_large,
+                 display, tc, THEME_FONT_LARGE,
                  field.w > 32u ? field.w - 32u : 0u);
     wm_canvas_fill(canvas,
         (wm_rect_t){field.x, field.y + (int32_t)field.h - (p->password_active ? 2 : 1),
                     field.w, p->password_active ? 2u : 1u},
-        p->password_active ? m3->primary : m3->on_surface_variant);
+        p->password_active ? th->accent : th->text_dim);
     if (p->password_active) {
         uint32_t cursor_x = (uint32_t)(field.x + 16) +
-            wm_font_measure(&state->font, masked, type->body_large);
+            wm_font_measure(&state->font, masked, THEME_FONT_LARGE);
         wm_canvas_fill(canvas,
             (wm_rect_t){(int32_t)cursor_x, text_y - 2,
-                        2u, (uint32_t)type->body_large + 4u},
-            m3->primary);
+                        2u, (uint32_t)THEME_FONT_LARGE + 4u},
+            th->accent);
     }
 
     /* The action pair M3 asks for: the confirming one filled, the
      * dismissing one outlined. */
     wm_rect_t connect = pw_connect_rect(body);
     bool can_connect = p->password_len >= 8u;
-    uint32_t connect_radius = m3_shape_radius(M3_SHAPE_FULL,
-                                                 connect.w, connect.h);
+    uint32_t connect_radius = wm_pill_radius(connect.w, connect.h);
     wm_canvas_fill_rounded(canvas, connect, connect_radius,
-        can_connect ? m3->primary
-                    : m3_state_layer(m3->surface, m3->on_surface,
-                                        M3_DISABLED_CONTAINER));
+        can_connect ? th->accent
+                    : color_mix(th->surface, th->text,
+                                        12u));
     draw_text_button(state, canvas, connect, "接続",
-        can_connect ? m3->on_primary
-                    : m3_state_layer(m3->surface, m3->on_surface,
-                                        M3_DISABLED_CONTENT));
+        can_connect ? th->on_accent
+                    : color_mix(th->surface, th->text,
+                                        THEME_DISABLED_PCT));
 
     wm_rect_t cancel = pw_cancel_rect(body);
     wm_canvas_stroke_rounded(canvas, cancel,
-        m3_shape_radius(M3_SHAPE_FULL, cancel.w, cancel.h), 1u,
-        m3->outline);
-    draw_text_button(state, canvas, cancel, "キャンセル", m3->primary);
+        wm_pill_radius(cancel.w, cancel.h), 1u,
+        th->border);
+    draw_text_button(state, canvas, cancel, "キャンセル", th->accent);
 
     wm_font_draw(&state->font, canvas, body.x, body.y + 170,
                  "WPA2-PSK passwords are 8-63 characters.",
-                 m3->on_surface_variant, type->label_small, body.w);
+                 th->text_dim, THEME_FONT_SMALL, body.w);
 }
 
 void wm_wifi_panel_draw(wm_state_t *state, wm_canvas_t *canvas)
 {
     if (!state || !canvas || !state->wifi_panel.open) return;
-    const m3_scheme_t *m3 = &state->theme.color;
+    const theme_t *th = &state->theme.color;
     wm_rect_t panel = wm_wifi_panel_rect(state);
     if (panel.w == 0u || panel.h == 0u) return;
     wm_rect_t halo = {panel.x - 12, panel.y - 6, panel.w + 24u, panel.h + 24u};
     if (!wm_rect_intersects(halo, canvas->clip)) return;
 
-    uint32_t radius = m3_shape_radius(M3_SHAPE_EXTRA_LARGE, panel.w, panel.h);
-    uint32_t container = m3_elevated(m3, m3->surface_container,
-                                        M3_ELEVATION_3);
+    uint32_t radius = THEME_RADIUS_LARGE;
+    uint32_t container = th->surface;
 
-    wm_canvas_elevation_shadow(canvas, panel, radius, M3_ELEVATION_3,
-                               m3_alpha(m3->shadow, 22u), 255u);
-    wm_canvas_fill_rounded(canvas, panel, radius, m3->outline_variant);
+    wm_canvas_shadow(canvas, panel, radius, WM_SHADOW_POPUP,
+                               color_alpha(0xFF000000u, 22u), 255u);
+    wm_canvas_fill_rounded(canvas, panel, radius, th->border);
     wm_canvas_fill_rounded(canvas,
         (wm_rect_t){panel.x + 1, panel.y + 1, panel.w - 2u, panel.h - 2u},
         radius > 0u ? radius - 1u : 0u, container);

@@ -18,11 +18,10 @@
  * the pointer.
  */
 
-/* Elevation of a window at rest. M3 does not raise a surface on focus, so
- * neither does this: focus is carried by the title bar's tone and the text
- * on it, and the shadow mask below stays valid across a focus change
- * instead of being rebuilt for every click. */
-#define WM_DECOR_ELEVATION M3_ELEVATION_3
+/* Shadow spread of a window. Focus does not change it -- the title bar's
+ * tone carries focus -- so the shadow mask below stays valid across a focus
+ * change instead of being rebuilt for every click. */
+#define WM_DECOR_ELEVATION WM_SHADOW_POPUP
 
 /* Opacity of the key light. The layered build-up below multiplies this
  * down per ring, so it is the ceiling rather than what any pixel gets. */
@@ -98,7 +97,7 @@ static bool shadow_pixel_visible(uint32_t x, uint32_t y,
     return dx2*dx2 + dy2*dy2 <= radius*radius*4u;
 }
 
-/* The same ramp wm_canvas_elevation_shadow() paints, baked into an 8-bit
+/* The same ramp wm_canvas_shadow() paints, baked into an 8-bit
  * mask so a window that is only moving does not repeat the work every
  * frame. The mask carries no vertical offset; draw_shadow() applies the
  * level's offset when it places it, which keeps the cache valid. */
@@ -185,10 +184,10 @@ static void draw_shadow(wm_state_t *state, wm_canvas_t *canvas,
 {
     uint32_t size = state->theme.shadow_size;
     if (!size) return;
-    uint32_t key_light = m3_alpha(state->theme.color.shadow,
+    uint32_t key_light = color_alpha(0xFF000000u,
                                      WM_DECOR_SHADOW_PERCENT);
     uint8_t theme_alpha = (uint8_t)(key_light >> 24u);
-    int32_t offset_y = m3_shadow_offset_y(WM_DECOR_ELEVATION);
+    int32_t offset_y = (int32_t)(WM_DECOR_ELEVATION * 2u / 5u);
     /* A live resize changes the cache dimensions every pointer frame. Use the
      * clipped direct shadow until the drag ends, then build one reusable mask
      * for the final size. */
@@ -197,7 +196,7 @@ static void draw_shadow(wm_state_t *state, wm_canvas_t *canvas,
          window->shadow_cache_frame_height != frame.h);
     if (resizing || !build_shadow_cache(window, frame.w, frame.h,
                              state->theme.corner_radius, size, theme_alpha)) {
-        wm_canvas_elevation_shadow(canvas, frame, state->theme.corner_radius,
+        wm_canvas_shadow(canvas, frame, state->theme.corner_radius,
                                    WM_DECOR_ELEVATION, key_light, opacity);
         return;
     }
@@ -251,7 +250,7 @@ static void draw_icon_button(wm_canvas_t *canvas, wm_rect_t box,
 {
     if (hovered) {
         wm_canvas_fill_rounded(canvas, box,
-            m3_shape_radius(M3_SHAPE_FULL, box.w, box.h),
+            wm_pill_radius(box.w, box.h),
             apply_opacity(hover_container, opacity));
     }
     wm_rect_t inner = {box.x + (int32_t)(box.w - BTN_GLYPH) / 2,
@@ -266,45 +265,38 @@ static void draw_title_buttons(wm_state_t *state, wm_canvas_t *canvas,
                                 const wm_window_t *window, wm_rect_t frame,
                                 uint32_t title_container, uint8_t opacity)
 {
-    const m3_scheme_t *m3 = &state->theme.color;
-    uint32_t state_layer = m3_state_layer(title_container, m3->on_surface,
-                                             M3_STATE_HOVER);
+    const theme_t *th = &state->theme.color;
+    uint32_t state_layer = color_mix(title_container, th->text,
+                                             THEME_HOVER_PCT);
 
     draw_icon_button(canvas,
         wm_decoration_title_button_rect(state, frame, WM_TITLE_BUTTON_MINIMIZE),
         WM_ICON_MINIMIZE, window->hover_minimize,
-        state_layer, m3->on_surface_variant, m3->on_surface, opacity);
+        state_layer, th->text_dim, th->text, opacity);
 
     draw_icon_button(canvas,
         wm_decoration_title_button_rect(state, frame, WM_TITLE_BUTTON_MAXIMIZE),
         window->maximized ? WM_ICON_RESTORE : WM_ICON_MAXIMIZE,
         window->hover_maximize,
-        state_layer, m3->on_surface_variant, m3->on_surface, opacity);
+        state_layer, th->text_dim, th->text, opacity);
 
     /* M3 reserves the error roles for destructive intent, and closing a
      * window is the one thing on this bar that throws work away. */
     draw_icon_button(canvas,
         wm_decoration_title_button_rect(state, frame, WM_TITLE_BUTTON_CLOSE),
         WM_ICON_CLOSE, window->hover_close,
-        m3->error_container, m3->on_surface_variant, m3->on_error_container,
+        th->danger, th->text_dim, th->on_danger,
         opacity);
 }
 
 static void draw_window_icon(wm_state_t *state, wm_canvas_t *canvas,
-                              const wm_window_t *window, wm_rect_t frame,
-                              uint8_t opacity)
+                              wm_rect_t frame, uint8_t opacity)
 {
     uint32_t isz = WM_DECOR_ICON_SIZE;
     int32_t x = frame.x + 9;
     int32_t y = frame.y + (int32_t)((state->theme.title_height - isz) / 2u);
-    if (window->has_icon)
-        wm_canvas_blit_scaled(canvas, (wm_rect_t){x,y,isz,isz},
-                              window->icon, 32u,32u, opacity,
-                              M3_SHAPE_EXTRA_SMALL);
-    else
-        wm_icon_draw(canvas, (wm_rect_t){x,y,isz,isz}, WM_ICON_DOC,
-                     apply_opacity(state->theme.color.on_surface_variant,
-                                   opacity));
+    wm_icon_draw(canvas, (wm_rect_t){x,y,isz,isz}, WM_ICON_DOC,
+                 apply_opacity(state->theme.color.text_dim, opacity));
 }
 
 void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
@@ -312,7 +304,7 @@ void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
 {
     if (!state || !canvas || !window || !window->visible ||
         window->minimized || window->visual_alpha <= 0.0f) return;
-    const m3_scheme_t *m3 = &state->theme.color;
+    const theme_t *th = &state->theme.color;
     uint8_t opacity = (uint8_t)(window->visual_alpha * 255.0f);
     wm_rect_t frame = visual_frame(state, window);
     if (!frame.w || !frame.h) return;
@@ -360,25 +352,22 @@ void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
 
     draw_shadow(state, canvas, window, frame, opacity);
 
-    uint32_t radius = m3_shape_radius(state->theme.corner_radius,
-                                         frame.w, frame.h);
+    uint32_t radius = wm_min_u32(state->theme.corner_radius,
+                                 wm_pill_radius(frame.w, frame.h));
 
     /* Outline first, then the surface inset by a pixel inside it: the ring
      * M3 draws around a container, without a second pass over the body. */
     wm_canvas_fill_rounded(canvas, frame, radius,
-                           apply_opacity(m3->outline_variant, opacity));
+                           apply_opacity(th->border, opacity));
     wm_rect_t inner = {frame.x+1, frame.y+1,
                        frame.w>2u?frame.w-2u:frame.w,
                        frame.h>2u?frame.h-2u:frame.h};
     wm_canvas_fill_rounded(canvas, inner, radius > 0u ? radius - 1u : 0u,
-                           apply_opacity(m3->surface_container_lowest, opacity));
+                           apply_opacity(th->surface, opacity));
 
-    /* The title bar carries focus. An active window's bar is a container
-     * lifted by the same elevation as its shadow; an inactive one sits a
-     * step lower, which is the whole difference M3 asks for. */
-    uint32_t title_container = window->has_focus
-        ? m3_elevated(m3, m3->surface_container, M3_ELEVATION_2)
-        : m3->surface_container_low;
+    /* The title bar carries focus: an inactive window's bar sits a tone
+     * lower than an active one's. */
+    uint32_t title_container = window->has_focus ? th->surface : th->bg;
     wm_rect_t title_rect = {frame.x+1, frame.y+1,
                              frame.w>2u?frame.w-2u:frame.w, title_h};
     uint32_t top_r = radius > 0u ? radius - 1u : 0u;
@@ -387,7 +376,7 @@ void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
     wm_canvas_fill(canvas,
         (wm_rect_t){frame.x+1, frame.y+(int32_t)title_h,
                     frame.w>2u?frame.w-2u:frame.w, 1u},
-        apply_opacity(m3->outline_variant, opacity));
+        apply_opacity(th->border, opacity));
 
     if (content.h) {
         if (is_unscaled(window)) {
@@ -401,7 +390,7 @@ void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
         }
     }
 
-    draw_window_icon(state, canvas, window, frame, opacity);
+    draw_window_icon(state, canvas, frame, opacity);
 
     /* `reserved` is everything that is not the title: the icon and its
      * margins on the left, the controls on the right. Below about forty
@@ -412,13 +401,13 @@ void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
     uint32_t text_max = frame.w > reserved + 40u ? frame.w - reserved : 0u;
     if (window->title[0] && text_max != 0u) {
         int32_t text_x = frame.x + 9 + (int32_t)WM_DECOR_ICON_SIZE + 8;
-        float size = state->theme.type.title_small;
+        float size = THEME_FONT_BODY;
         int32_t text_y = frame.y +
             ((int32_t)state->theme.title_height - (int32_t)size) / 2 - 1;
         wm_font_draw(&state->font, canvas, text_x, text_y,
                      window->title,
                      apply_opacity(window->has_focus ?
-                         m3->on_surface : m3->on_surface_variant, opacity),
+                         th->text : th->text_dim, opacity),
                      size, text_max);
     }
 

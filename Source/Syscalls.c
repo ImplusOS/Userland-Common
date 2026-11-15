@@ -20,8 +20,9 @@
 #include "../API/Source/PnP.h"
 #include "../API/Source/WiFi.h"
 
-static uint32_t g_current_window_id = 0;
 static uint32_t g_wm_request_id = 0;
+
+static void window_release_backing_store(window_id_t wid);
 static int32_t g_cached_wm_pid = -1;
 
 #define MAX_INPUT_QUEUE             64
@@ -713,26 +714,10 @@ void window_show(window_id_t wid)
     ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
 }
 
-void window_hide(window_id_t wid)
-{
-    wm_msg_header_t hdr;
-    hdr.type = WM_HIDE_WINDOW;
-    hdr.window_id = wid;
-    ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
-}
-
 void window_raise(window_id_t wid)
 {
     wm_msg_header_t hdr;
     hdr.type = WM_RAISE_WINDOW;
-    hdr.window_id = wid;
-    ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
-}
-
-void window_lower(window_id_t wid)
-{
-    wm_msg_header_t hdr;
-    hdr.type = WM_LOWER_WINDOW;
     hdr.window_id = wid;
     ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
 }
@@ -855,53 +840,6 @@ int32_t window_get_content_rect(window_id_t wid, uint32_t *x, uint32_t *y, uint3
     return -1;
 }
 
-window_id_t window_get_focus(void)
-{
-    struct {
-        wm_msg_header_t hdr;
-    } cmd;
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.hdr.type = WM_GET_FOCUS;
-    cmd.hdr.request_id = ++g_wm_request_id;
-    cmd.hdr.window_id = 0;
-
-    int32_t wm_pid = window_get_wm_pid();
-    if (wm_pid < 0) {
-        return 0;
-    }
-    if (ipc_send_message(wm_pid, &cmd, sizeof(cmd)) < 0) {
-        return 0;
-    }
-
-    ipc_message_t resp __attribute__((aligned(16)));
-    uint64_t deadline = get_uptime_ms() + WM_RPC_TIMEOUT_MS;
-    while (!deadline_expired(deadline)) {
-        if (ipc_receive_raw(&resp) == 0) {
-            if (resp.size >= sizeof(wm_msg_header_t) + sizeof(int32_t) + sizeof(uint32_t)) {
-                struct {
-                    wm_msg_header_t hdr;
-                    int32_t status;
-                    uint32_t focused_window_id;
-                } *reply = (void *)resp.data;
-
-                if (reply->hdr.type == WM_GET_FOCUS &&
-                    reply->hdr.request_id == cmd.hdr.request_id) {
-                    if (reply->status != WM_STATUS_OK) {
-                        (void)os_errno_from_i32_status(reply->status);
-                        return 0;
-                    }
-                    os_clear_errno();
-                    return reply->focused_window_id;
-                }
-            }
-            preserve_unhandled_message(&resp);
-        }
-        process_yield();
-    }
-    os_set_errno(ETIMEDOUT);
-    return 0;
-}
-
 int32_t window_subscribe_keyboard(window_id_t wid)
 {
     struct {
@@ -938,108 +876,16 @@ void window_set_system(window_id_t wid, bool is_system)
     ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
 }
 
-int32_t window_unsubscribe_input(window_id_t wid)
+void draw_pixel(uint32_t x, uint32_t y, uint32_t color)
 {
-    struct {
-        wm_msg_header_t hdr;
-        uint32_t input_types;
-    } cmd;
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.hdr.type = WM_UNSUBSCRIBE_INPUT;
-    cmd.hdr.window_id = wid;
-    cmd.input_types = 0;
-    return ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
+    (void)syscall3(SYSCALL_DISPLAY_DRAW_PIXEL, (uint64_t)x, (uint64_t)y,
+                   (uint64_t)color);
 }
 
-void window_set_bg_color(window_id_t wid, uint32_t color)
+void draw_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color)
 {
-    uint32_t win_x = 0;
-    uint32_t win_y = 0;
-    uint32_t win_w = 0;
-    uint32_t win_h = 0;
-    if (window_get_rect(wid, &win_x, &win_y, &win_w, &win_h) < 0) {
-        return;
-    }
-    (void)win_x;
-    (void)win_y;
-
-    struct {
-        wm_msg_header_t hdr;
-        uint32_t x, y, w, h;
-        uint32_t color_value;
-    } cmd;
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.hdr.type = WM_DRAW_RECT;
-    cmd.hdr.window_id = wid;
-    cmd.x = 0;
-    cmd.y = 0;
-    cmd.w = win_w;
-    cmd.h = win_h;
-    cmd.color_value = color;
-    (void)ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
-}
-
-void window_clear(window_id_t wid)
-{
-    if (wid == 0) {
-        return;
-    }
-
-    wm_msg_header_t hdr;
-    memset(&hdr, 0, sizeof(hdr));
-    hdr.type = WM_CLEAR_WINDOW;
-    hdr.window_id = wid;
-    (void)ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
-}
-
-int32_t graphics_init(uint32_t window_id)
-{
-    g_current_window_id = window_id;
-    return 0;
-}
-
-__attribute__((optimize("O2"))) void draw_pixel(uint32_t x, uint32_t y, uint32_t color)
-{
-    if (g_current_window_id == 0) {
-        (void)syscall3(SYSCALL_DISPLAY_DRAW_PIXEL,
-                       (uint64_t)x,
-                       (uint64_t)y,
-                       (uint64_t)color);
-        return;
-    }
-
-    struct {
-        wm_msg_header_t hdr;
-        uint32_t x, y;
-        uint32_t color;
-    } cmd;
-    cmd.hdr.type = WM_DRAW_PIXEL;
-    cmd.hdr.window_id = g_current_window_id;
-    cmd.x = x; cmd.y = y; cmd.color = color;
-    ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
-}
-
-__attribute__((optimize("O2"))) void draw_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color)
-{
-    if (g_current_window_id == 0) {
-        (void)syscall5(SYSCALL_DISPLAY_FILL_RECT,
-                       (uint64_t)x,
-                       (uint64_t)y,
-                       (uint64_t)w,
-                       (uint64_t)h,
-                       (uint64_t)color);
-        return;
-    }
-
-    struct {
-        wm_msg_header_t hdr;
-        uint32_t x, y, w, h;
-        uint32_t color;
-    } cmd;
-    cmd.hdr.type = WM_DRAW_RECT;
-    cmd.hdr.window_id = g_current_window_id;
-    cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h; cmd.color = color;
-    ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
+    (void)syscall5(SYSCALL_DISPLAY_FILL_RECT, (uint64_t)x, (uint64_t)y,
+                   (uint64_t)w, (uint64_t)h, (uint64_t)color);
 }
 
 uint32_t get_pixel(uint32_t x, uint32_t y)
@@ -1047,36 +893,18 @@ uint32_t get_pixel(uint32_t x, uint32_t y)
     return (uint32_t)syscall2(SYSCALL_DISPLAY_GET_PIXEL, (uint64_t)x, (uint64_t)y);
 }
 
-__attribute__((optimize("O2"))) void draw_present(void)
+void draw_present(void)
 {
-    if (g_current_window_id == 0) {
-        (void)syscall0(SYSCALL_DISPLAY_PRESENT);
-        return;
-    }
-
-    wm_msg_header_t hdr;
-    hdr.type = WM_UPDATE_COMPLETE;
-    hdr.window_id = g_current_window_id;
-    ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
+    (void)syscall0(SYSCALL_DISPLAY_PRESENT);
 }
 
-__attribute__((optimize("O2"))) void draw_present_rects(const display_rect_t *rects, uint32_t count)
+void draw_present_rects(const display_rect_t *rects, uint32_t count)
 {
-    if (g_current_window_id == 0) {
-        if (rects != NULL && count != 0u) {
-            (void)syscall2(SYSCALL_DISPLAY_PRESENT_RECTS,
-                           (uint64_t)(uintptr_t)rects,
-                           (uint64_t)count);
-        } else {
-            (void)syscall0(SYSCALL_DISPLAY_PRESENT);
-        }
-        return;
-    }
-
-    wm_msg_header_t hdr;
-    hdr.type = WM_UPDATE_COMPLETE;
-    hdr.window_id = g_current_window_id;
-    ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
+    if (rects != NULL && count != 0u)
+        (void)syscall2(SYSCALL_DISPLAY_PRESENT_RECTS, (uint64_t)(uintptr_t)rects,
+                       (uint64_t)count);
+    else
+        (void)syscall0(SYSCALL_DISPLAY_PRESENT);
 }
 
 uint32_t get_display_width(void)
@@ -1224,159 +1052,6 @@ int32_t window_input_mouse_poll_from(input_mouse_event_t *out,
     return 1;
 }
 
-int32_t window_input_keyboard_wait(input_keyboard_event_t *out)
-{
-    while (1) {
-        if (window_input_keyboard_poll(out) > 0) return 1;
-        process_yield();
-    }
-}
-
-int32_t window_input_mouse_wait(input_mouse_event_t *out)
-{
-    while (1) {
-        if (window_input_mouse_poll(out) > 0) return 1;
-        process_yield();
-    }
-}
-
-int32_t window_input_keyboard_pending(void)
-{
-    ipc_message_t msg;
-    uint32_t drain_count = 0;
-    while (drain_count < IPC_DRAIN_MAX && ipc_receive_raw(&msg) == 0) {
-        preserve_unhandled_message(&msg);
-        ++drain_count;
-    }
-    return (int32_t)g_kbd_count;
-}
-
-int32_t window_input_mouse_pending(void)
-{
-    ipc_message_t msg;
-    uint32_t drain_count = 0;
-    while (drain_count < IPC_DRAIN_MAX && ipc_receive_raw(&msg) == 0) {
-        preserve_unhandled_message(&msg);
-        ++drain_count;
-    }
-    return (int32_t)g_mouse_count;
-}
-
-int32_t window_set_layout_xml(window_id_t wid, const char *xml_str, uint32_t xml_len)
-{
-    if (wid == 0 || !xml_str) {
-        os_set_errno(EINVAL);
-        return -1;
-    }
-    
-    struct {
-        uint32_t type;
-        uint32_t request_id;
-        uint32_t window_id;
-        uint32_t total_size;
-    } start_cmd;
-    
-    start_cmd.type = WM_SET_LAYOUT_XML_START;
-    start_cmd.request_id = ++g_wm_request_id;
-    start_cmd.window_id = wid;
-    start_cmd.total_size = xml_len;
-    
-    int32_t wm_pid = window_get_wm_pid();
-    int32_t res = ipc_send_message(wm_pid, &start_cmd, sizeof(start_cmd));
-
-    uint64_t retry_deadline = get_uptime_ms() + WM_SEND_RETRY_TIMEOUT_MS;
-    while (res == OS_STATUS_LIMIT_REACHED && !deadline_expired(retry_deadline)) {
-        process_yield();
-        res = ipc_send_message(wm_pid, &start_cmd, sizeof(start_cmd));
-    }
-    if (res < 0) return res;
-    
-    uint32_t offset = 0;
-    while (offset < xml_len) {
-        char chunk_msg[IPC_MESSAGE_MAX_SIZE];
-        wm_msg_header_t *hdr = (wm_msg_header_t *)chunk_msg;
-        hdr->type = WM_SET_LAYOUT_XML_CHUNK;
-        hdr->request_id = ++g_wm_request_id;
-        hdr->window_id = wid;
-        
-        uint32_t chunk_capacity = IPC_MESSAGE_MAX_SIZE - sizeof(wm_msg_header_t);
-        uint32_t copy_size = (xml_len - offset < chunk_capacity) ? (xml_len - offset) : chunk_capacity;
-        
-        memcpy(chunk_msg + sizeof(wm_msg_header_t), xml_str + offset, copy_size);
-        
-        res = ipc_send_message(wm_pid, chunk_msg, sizeof(wm_msg_header_t) + copy_size);
-        retry_deadline = get_uptime_ms() + WM_SEND_RETRY_TIMEOUT_MS;
-        while (res == OS_STATUS_LIMIT_REACHED && !deadline_expired(retry_deadline)) {
-            process_yield();
-            res = ipc_send_message(wm_pid, chunk_msg, sizeof(wm_msg_header_t) + copy_size);
-        }
-        if (res < 0) return res;
-        
-        offset += copy_size;
-    }
-    
-    wm_msg_header_t end_cmd;
-    end_cmd.type = WM_SET_LAYOUT_XML_END;
-    end_cmd.request_id = ++g_wm_request_id;
-    end_cmd.window_id = wid;
-    
-    res = ipc_send_message(wm_pid, &end_cmd, sizeof(end_cmd));
-    retry_deadline = get_uptime_ms() + WM_SEND_RETRY_TIMEOUT_MS;
-    while (res == OS_STATUS_LIMIT_REACHED && !deadline_expired(retry_deadline)) {
-        process_yield();
-        res = ipc_send_message(wm_pid, &end_cmd, sizeof(end_cmd));
-    }
-    return res;
-}
-
-int32_t window_load_layout(window_id_t wid, const char *xml_path)
-{
-    int32_t fd = file_open(xml_path, 0);
-    if (fd < 0) return fd;
-    
-    char *xml_buf = malloc(4096);
-    if (!xml_buf) {
-        file_close(fd);
-        return -1;
-    }
-    
-    int64_t bytes = file_read(fd, xml_buf, 4095);
-    file_close(fd);
-    
-    if (bytes <= 0) {
-        free(xml_buf);
-        return -1;
-    }
-    xml_buf[bytes] = '\0';
-    
-    int32_t res = window_set_layout_xml(wid, xml_buf, (uint32_t)bytes);
-    free(xml_buf);
-    return res;
-}
-
-void window_draw_text(window_id_t wid, uint32_t x, uint32_t y, const char *text, uint32_t color, float font_size)
-{
-    struct {
-        wm_msg_header_t hdr;
-        uint32_t x, y;
-        uint32_t color;
-        float font_size;
-        char text[128];
-    } cmd;
-
-    if (!text || wid == 0) return;
-
-    cmd.hdr.type = WM_DRAW_TEXT;
-    cmd.hdr.window_id = wid;
-    cmd.x = x;
-    cmd.y = y;
-    cmd.color = color;
-    cmd.font_size = font_size;
-    os_strcpy_s(cmd.text, sizeof(cmd.text), text);
-
-    ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
-}
-
 void window_show_notification(const char *title, const char *message)
 {
     struct {
@@ -1395,7 +1070,7 @@ void window_show_notification(const char *title, const char *message)
     ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
 }
 
-void window_show_dialog(uint32_t type, const char *title, const char *message)
+static void window_show_dialog(uint32_t type, const char *title, const char *message)
 {
     struct {
         wm_msg_header_t hdr;
@@ -1415,21 +1090,17 @@ void window_show_dialog(uint32_t type, const char *title, const char *message)
     ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
 }
 
-/* Retint the desktop. The seed is all the window manager needs: it expands
- * it into the full set of Material Design 3 colour roles itself
- * (API/Source/Material.h), so a caller picks one colour rather than trying
- * to stay consistent across a dozen. */
-void window_set_theme_seed(uint32_t seed, bool dark)
+void window_set_theme(uint32_t accent, bool dark)
 {
     struct {
         wm_msg_header_t hdr;
-        uint32_t seed;
+        uint32_t accent;
         uint32_t dark;
     } cmd;
 
     cmd.hdr.type = WM_SET_THEME;
     cmd.hdr.window_id = 0;
-    cmd.seed = seed;
+    cmd.accent = accent;
     cmd.dark = dark ? 1u : 0u;
 
     ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
@@ -1443,51 +1114,9 @@ void window_reload_background(void)
     ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
 }
 
-void window_show_info(const char *title, const char *message)
-{
-    window_show_dialog(0u, title, message);
-}
-
-void window_show_warning(const char *title, const char *message)
-{
-    window_show_dialog(1u, title, message);
-}
-
 void window_show_error(const char *title, const char *message)
 {
     window_show_dialog(2u, title, message);
-}
-
-uint32_t window_get_capabilities(void)
-{
-    wm_msg_header_t command;
-    memset(&command, 0, sizeof(command));
-    command.type = WM_GET_CAPABILITIES;
-    command.request_id = ++g_wm_request_id;
-    int32_t wm_pid = window_get_wm_pid();
-    if (wm_pid < 0 || ipc_send_message(wm_pid, &command, sizeof(command)) < 0) return 0;
-
-    ipc_message_t response __attribute__((aligned(16)));
-    uint64_t deadline = get_uptime_ms() + WM_RPC_TIMEOUT_MS;
-    while (!deadline_expired(deadline)) {
-        if (ipc_receive_raw(&response) == 0) {
-            if (response.size >= sizeof(wm_msg_header_t) + sizeof(int32_t) + sizeof(uint32_t)) {
-                struct {
-                    wm_msg_header_t header;
-                    int32_t status;
-                    uint32_t capabilities;
-                } *reply = (void *)response.data;
-                if (reply->header.type == WM_GET_CAPABILITIES &&
-                    reply->header.request_id == command.request_id) {
-                    return reply->status == WM_STATUS_OK ? reply->capabilities : 0u;
-                }
-            }
-            preserve_unhandled_message(&response);
-        }
-        process_yield();
-    }
-    os_set_errno(ETIMEDOUT);
-    return 0;
 }
 
 static uint32_t *window_get_backing_store_internal(window_id_t wid, uint32_t *out_w, uint32_t *out_h, int32_t wm_pid)
@@ -1671,7 +1300,7 @@ int32_t window_set_close_policy(window_id_t wid, bool owner_handles)
     return ipc_send_message(window_get_wm_pid(), &command, sizeof(command));
 }
 
-void window_release_backing_store(window_id_t wid)
+static void window_release_backing_store(window_id_t wid)
 {
     if (wid == 0u) return;
     for (uint32_t i = 0u;
@@ -1700,38 +1329,6 @@ void window_damage(window_id_t wid, uint32_t x, uint32_t y, uint32_t w, uint32_t
     command.w = w;
     command.h = h;
     (void)ipc_send_message(window_get_wm_pid(), &command, sizeof(command));
-}
-
-void window_begin_transaction(window_id_t wid)
-{
-    wm_msg_header_t command;
-    memset(&command, 0, sizeof(command));
-    command.type = WM_BEGIN_TRANSACTION;
-    command.window_id = wid;
-    (void)ipc_send_message(window_get_wm_pid(), &command, sizeof(command));
-}
-
-void window_end_transaction(window_id_t wid)
-{
-    wm_msg_header_t command;
-    memset(&command, 0, sizeof(command));
-    command.type = WM_END_TRANSACTION;
-    command.window_id = wid;
-    (void)ipc_send_message(window_get_wm_pid(), &command, sizeof(command));
-}
-
-int32_t window_set_icon_path(window_id_t wid, const char *path)
-{
-    if (wid == 0u || !path) return WM_STATUS_INVALID_ARG;
-    struct {
-        wm_msg_header_t header;
-        char path[192];
-    } command;
-    memset(&command, 0, sizeof(command));
-    command.header.type = WM_SET_WINDOW_ICON_PATH;
-    command.header.window_id = wid;
-    os_strcpy_s(command.path, sizeof(command.path), path);
-    return ipc_send_message(window_get_wm_pid(), &command, sizeof(command));
 }
 
 int32_t window_set_surface_opaque(window_id_t wid, bool opaque)

@@ -107,13 +107,3 @@ void wm_region_add(wm_region_t *region, wm_rect_t rect, wm_rect_t bounds)
     region->rects[region->count++] = rect;
 }
 
-void wm_region_union(wm_region_t *dst, const wm_region_t *src, wm_rect_t bounds)
-{
-    if (!dst || !src || dst->full) return;
-    if (src->full) {
-        wm_region_add_full(dst);
-        return;
-    }
-    for (uint32_t i = 0; i < src->count; ++i)
-        wm_region_add(dst, src->rects[i], bounds);
-}

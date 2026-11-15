@@ -35,10 +35,8 @@ COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/sys/$(ARCH)/hal_syscall.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/sys/$(ARCH)/setjmp.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/assert.o \
-               $(COMMON_LIBS_DIR)/API/XMLParser.o \
-               $(COMMON_LIBS_DIR)/API/Material.o \
-               $(COMMON_LIBS_DIR)/API/MaterialTheme.o \
-               $(COMMON_LIBS_DIR)/API/ImUI.o \
+               $(COMMON_LIBS_DIR)/API/Theme.o \
+               $(COMMON_LIBS_DIR)/API/UI.o \
                $(COMMON_LIBS_DIR)/API/XSession.o \
                $(COMMON_LIBS_DIR)/API/X11Wire.o \
                $(COMMON_LIBS_DIR)/API/LinuxEnv.o \

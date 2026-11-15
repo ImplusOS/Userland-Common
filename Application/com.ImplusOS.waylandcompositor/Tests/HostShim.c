@@ -253,7 +253,6 @@ int32_t window_poll_resize(window_id_t w, uint32_t *ow, uint32_t *oh)
 { (void)w; (void)ow; (void)oh; return 0; }
 void window_damage(window_id_t w, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 { (void)w; (void)a; (void)b; (void)c; (void)d; }
-void window_end_transaction(window_id_t w) { (void)w; }
 void window_show(window_id_t w) { (void)w; }
 void window_raise(window_id_t w) { (void)w; }
 int32_t window_set_surface_opaque(window_id_t w, bool o) { (void)w; (void)o; return 0; }

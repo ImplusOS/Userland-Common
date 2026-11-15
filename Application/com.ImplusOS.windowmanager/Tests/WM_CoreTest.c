@@ -113,17 +113,6 @@ static void test_rounded_corners(void)
     assert((pixels[1u * 10u + 3u] >> 24u) > 0u);
 }
 
-static void test_icon_fallback(void)
-{
-    uint32_t pixels[12u * 12u];
-    memset(pixels, 0, sizeof(pixels));
-    wm_canvas_t canvas;
-    wm_canvas_init(&canvas, pixels, 12u, 12u, 12u);
-    wm_canvas_draw_icon(&canvas, (wm_rect_t){2, 2, 4u, 4u}, NULL, 255u, 0u, 0xFFFFFFFFu);
-    assert(pixels[2u * 12u + 2u] == 0xFFFFFFFFu);
-    assert(pixels[5u * 12u + 5u] == 0xFFFFFFFFu);
-}
-
 static void test_event_queue(void)
 {
     wm_event_queue_t queue;
@@ -228,7 +217,6 @@ int main(void)
     test_damage_overflow();
     test_raster_clip_and_blend();
     test_rounded_corners();
-    test_icon_fallback();
     test_event_queue();
     test_display_monitor_selection();
     test_display_work_area();

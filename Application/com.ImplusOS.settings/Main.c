@@ -9,7 +9,7 @@
  * boot took phase by phase, what is attached, and what storage it has.
  */
 
-#include "ImUI.h"
+#include "UI.h"
 #include "File.h"
 #include "Process.h"
 #include "Serial.h"
@@ -45,9 +45,9 @@ static const char *const k_pane_note[PANE_COUNT] = {
     "配色とテーマ", "解像度とリフレッシュレート", "CPU・メモリ・画面",
     "起動の各フェーズの計測", "接続されている機器", "ディスクと容量",
 };
-static const imui_icon_t k_pane_icon[PANE_COUNT] = {
-    IMUI_ICON_EDIT, IMUI_ICON_NONE, IMUI_ICON_HOME, IMUI_ICON_REFRESH,
-    IMUI_ICON_DRIVE, IMUI_ICON_FILE,
+static const ui_icon_t k_pane_icon[PANE_COUNT] = {
+    UI_ICON_EDIT, UI_ICON_NONE, UI_ICON_HOME, UI_ICON_REFRESH,
+    UI_ICON_DRIVE, UI_ICON_FILE,
 };
 
 /* The System pane reads a moving target (CPU share), so it is refilled on a
@@ -55,13 +55,10 @@ static const imui_icon_t k_pane_icon[PANE_COUNT] = {
  * scroll offset unless the caller puts it back. */
 #define SYSTEM_REFRESH_MS 1000u
 
-/*
- * The seeds offered for the desktop. M3 generates everything else from one
- * of these, so this list is the entire colour choice -- there is no second
- * decision to keep consistent with it. The first is M3's own baseline.
- */
-static const struct { const char *name; uint32_t seed; } k_seeds[] = {
-    {"バイオレット（標準）", 0xFF6750A4u},
+/* The accent colours offered for the desktop. The rest of the palette is
+ * fixed (light or dark), so this list is the entire colour choice. */
+static const struct { const char *name; uint32_t accent; } k_accents[] = {
+    {"バイオレット（標準）", THEME_ACCENT_DEFAULT},
     {"ブルー",               0xFF0B57D0u},
     {"ティール",             0xFF00696Du},
     {"グリーン",             0xFF3F6B2Fu},
@@ -69,15 +66,15 @@ static const struct { const char *name; uint32_t seed; } k_seeds[] = {
     {"レッド",               0xFF9C4146u},
     {"モノクロ",             0xFF808080u},
 };
-#define SEED_COUNT ((uint32_t)(sizeof(k_seeds) / sizeof(k_seeds[0])))
+#define ACCENT_COUNT ((uint32_t)(sizeof(k_accents) / sizeof(k_accents[0])))
 
-static imui_app_t    *g_app;
-static imui_widget_t *w_nav;
-static imui_widget_t *w_content;
-static imui_widget_t *w_title;
-static imui_widget_t *w_status;
+static ui_app_t    *g_app;
+static ui_widget_t *w_nav;
+static ui_widget_t *w_content;
+static ui_widget_t *w_title;
+static ui_widget_t *w_status;
 static pane_t         g_pane = PANE_APPEARANCE;
-static uint32_t       g_seed = M3_SEED_BASELINE;
+static uint32_t       g_accent = THEME_ACCENT_DEFAULT;
 static bool           g_dark;
 
 #define DISPLAY_SETTINGS_MAX_MODES 16u
@@ -117,110 +114,70 @@ static void format_bytes(uint64_t bytes, char *out, size_t cap)
 
 static void status(const char *text)
 {
-    imui_set_text(g_app, w_status, text);
-    imui_request_paint(g_app);
+    ui_set_text(w_status, text);
+    ui_redraw();
 }
 
 /* ------------------------------------------------------------- theme */
 
 /*
- * The shell reads /var/System/shell.theme before the copy shipped with the
- * image, so writing the seed and mode there is all it takes for the choice
- * to survive into the next session -- and for applications, which read the
- * same file when they start, to come up matching.
+ * The shell and every application read /var/System/shell.theme before the
+ * copy shipped with the image, so writing the accent and mode there is all
+ * it takes for the choice to survive into the next session.
  */
-static bool write_theme_file(uint32_t seed, bool dark)
+static bool write_theme_file(uint32_t accent, bool dark)
 {
-    char text[512];
+    char text[160];
     int n = snprintf(text, sizeof(text),
-        "; Written by com.ImplusOS.settings.\n"
-        "; The desktop's Material Design 3 scheme is generated from `seed`;\n"
-        "; every colour role follows from it.\n"
-        "\n"
-        "[Material]\n"
-        "seed            = #%06X\n"
-        "mode            = %s\n"
-        "type_scale      = 1.0\n"
-        "\n"
-        "[Metrics]\n"
-        "title_height    = 40\n"
-        "corner_radius   = 16\n"
-        "shadow_size     = 10\n"
-        "dock_height     = 48\n",
-        (unsigned)(seed & 0x00FFFFFFu), dark ? "dark" : "light");
+                     "; Written by com.ImplusOS.settings.\n"
+                     "accent = #%06X\n"
+                     "mode   = %s\n",
+                     (unsigned)(accent & 0x00FFFFFFu), dark ? "dark" : "light");
     if (n <= 0) return false;
 
     (void)file_mkdir(THEME_DIR);
     int32_t fd = file_creat(THEME_FILE);
     if (fd < 0) fd = file_open(THEME_FILE, 1);
     if (fd < 0) return false;
-    /* Truncate to what was just written: without it a shorter theme leaves
-     * the tail of the longer one behind, and a stray setting would be
-     * parsed as part of this one. file_truncate() means the old file no
-     * longer has to be unlinked first -- which used to leave no file at
-     * all if the create that followed failed. */
+    /* Truncate to what was just written, or a shorter file keeps the tail
+     * of the longer one it replaced. */
     int64_t written = file_write(fd, text, (uint64_t)n);
     int32_t trimmed = file_truncate(fd, written > 0 ? (uint64_t)written : 0u);
     file_close(fd);
     return written == (int64_t)n && trimmed >= 0;
 }
 
+/* The shell repaints with the new theme at once; applications read the
+ * file at startup, so they follow when they are next launched. */
 static void apply_theme(void)
 {
-    bool saved = write_theme_file(g_seed, g_dark);
-    /* The shell rebuilds its whole scheme from the seed, so this is visible
-     * at once. Applications read the file at startup, so they follow when
-     * they are next launched -- which is worth saying rather than leaving
-     * the user to wonder. */
-    window_set_theme_seed(g_seed, g_dark);
+    bool saved = write_theme_file(g_accent, g_dark);
+    window_set_theme(g_accent, g_dark);
     status(saved ? "テーマを適用しました（起動中のアプリは次回起動時に反映）"
                  : "テーマを適用しました（保存できませんでした）");
 }
 
-static void on_pick_seed(imui_app_t *app, imui_widget_t *w, void *user)
-{
-    (void)app; (void)w;
-    g_seed = k_seeds[(uintptr_t)user].seed;
-    apply_theme();
-}
-
-static void on_pick_mode(imui_app_t *app, imui_widget_t *w, void *user)
-{
-    (void)app; (void)w;
-    g_dark = (uintptr_t)user != 0u;
-    apply_theme();
-}
-
-static void on_reload_wallpaper(imui_app_t *app, imui_widget_t *w, void *user)
-{
-    (void)app; (void)w; (void)user;
-    window_reload_background();
-    status("壁紙を読み込み直しました。");
-}
-
-/* ------------------------------------------------------------- panes */
-
 static void fill_appearance(void)
 {
     char line[160];
-    imui_list_add(w_content, IMUI_ICON_NONE, "配色",
-                  "シード色ひとつから、画面全体の配色が生成されます");
-    for (uint32_t i = 0; i < SEED_COUNT; ++i) {
-        bool current = (k_seeds[i].seed & 0x00FFFFFFu) == (g_seed & 0x00FFFFFFu);
+    ui_list_add(w_content, UI_ICON_NONE, "アクセントカラー",
+                "ボタンや選択中の項目に使われる色です");
+    for (uint32_t i = 0; i < ACCENT_COUNT; ++i) {
+        bool current = (k_accents[i].accent & 0x00FFFFFFu) == (g_accent & 0x00FFFFFFu);
         snprintf(line, sizeof(line), "#%06X%s",
-                 (unsigned)(k_seeds[i].seed & 0x00FFFFFFu),
+                 (unsigned)(k_accents[i].accent & 0x00FFFFFFu),
                  current ? "  ·  使用中" : "");
-        imui_list_add(w_content, current ? IMUI_ICON_CHECK : IMUI_ICON_NONE,
-                      k_seeds[i].name, line);
+        ui_list_add(w_content, current ? UI_ICON_CHECK : UI_ICON_NONE,
+                    k_accents[i].name, line);
     }
-    imui_list_add(w_content, IMUI_ICON_NONE, "明るさ",
-                  g_dark ? "ダーク（選択中）" : "ライト（選択中）");
-    imui_list_add(w_content, g_dark ? IMUI_ICON_NONE : IMUI_ICON_CHECK,
-                  "ライト", "明るい背景に暗い文字");
-    imui_list_add(w_content, g_dark ? IMUI_ICON_CHECK : IMUI_ICON_NONE,
-                  "ダーク", "暗い背景に明るい文字");
-    imui_list_add(w_content, IMUI_ICON_REFRESH, "壁紙を再読み込み",
-                  "デスクトップの背景画像を読み込み直します");
+    ui_list_add(w_content, UI_ICON_NONE, "明るさ",
+                g_dark ? "ダーク（選択中）" : "ライト（選択中）");
+    ui_list_add(w_content, g_dark ? UI_ICON_NONE : UI_ICON_CHECK,
+                "ライト", "明るい背景に暗い文字");
+    ui_list_add(w_content, g_dark ? UI_ICON_CHECK : UI_ICON_NONE,
+                "ダーク", "暗い背景に明るい文字");
+    ui_list_add(w_content, UI_ICON_REFRESH, "壁紙を再読み込み",
+                "デスクトップの背景画像を読み込み直します");
 }
 
 /* CPU share is a rate between two samples of the kernel's cumulative idle
@@ -289,7 +246,7 @@ static void fill_display(void)
 
     if (display_get_topology(&topology) < 0 ||
         topology.monitor_count == 0u) {
-        imui_list_add(w_content, IMUI_ICON_NONE,
+        ui_list_add(w_content, UI_ICON_NONE,
                       "ディスプレイ情報を取得できません", "");
         return;
     }
@@ -310,7 +267,7 @@ static void fill_display(void)
         snprintf(heading, sizeof(heading), "%s  ·  %ux%u",
                  monitor.name[0] ? monitor.name : "ディスプレイ",
                  monitor.width, monitor.height);
-        imui_list_add(w_content, IMUI_ICON_NONE, heading,
+        ui_list_add(w_content, UI_ICON_NONE, heading,
                       (monitor.flags & DISPLAY_MONITOR_FLAG_MODESET)
                           ? "モードを選択して適用できます"
                           : "この出力はモード変更に対応していません");
@@ -362,8 +319,8 @@ static void fill_display(void)
                              "  ·  変更非対応");
             }
 
-            imui_list_add(w_content,
-                          current ? IMUI_ICON_CHECK : IMUI_ICON_NONE,
+            ui_list_add(w_content,
+                          current ? UI_ICON_CHECK : UI_ICON_NONE,
                           label, detail);
             ++displayed_modes;
             if (g_display_action_count < DISPLAY_SETTINGS_MAX_ACTIONS) {
@@ -380,7 +337,7 @@ static void fill_display(void)
     }
 
     if (displayed_modes == 0u)
-        imui_list_add(w_content, IMUI_ICON_NONE,
+        ui_list_add(w_content, UI_ICON_NONE,
                       "利用できる表示モードがありません", "");
 }
 
@@ -393,13 +350,13 @@ static void fill_system(void)
         snprintf(value, sizeof(value), "%s  ·  %u コア / %u スレッド  ·  %u MHz",
                  cpu.brand[0] ? cpu.brand : cpu.vendor,
                  cpu.physical_cores, cpu.logical_cores, cpu.frequency_mhz);
-        imui_list_add(w_content, IMUI_ICON_NONE, "プロセッサ", value);
+        ui_list_add(w_content, UI_ICON_NONE, "プロセッサ", value);
     }
 
     system_arch_info_t arch;
     if (os_get_arch_info(&arch) >= 0) {
         snprintf(value, sizeof(value), "%s  ·  %u bit", arch.name, arch.bits);
-        imui_list_add(w_content, IMUI_ICON_NONE, "アーキテクチャ", value);
+        ui_list_add(w_content, UI_ICON_NONE, "アーキテクチャ", value);
     }
 
     system_memory_info_t memory;
@@ -410,7 +367,7 @@ static void fill_system(void)
         format_bytes(memory.free_bytes, freed, sizeof(freed));
         snprintf(value, sizeof(value), "使用 %s / 全体 %s  ·  空き %s",
                  used, total, freed);
-        imui_list_add(w_content, IMUI_ICON_NONE, "メモリ", value);
+        ui_list_add(w_content, UI_ICON_NONE, "メモリ", value);
     }
 
     system_graphics_info_t graphics;
@@ -419,24 +376,24 @@ static void fill_system(void)
                  graphics.vendor, graphics.model,
                  graphics.display_width, graphics.display_height,
                  graphics.bits_per_pixel);
-        imui_list_add(w_content, IMUI_ICON_NONE, "グラフィックス", value);
+        ui_list_add(w_content, UI_ICON_NONE, "グラフィックス", value);
     }
 
     fill_cpu_usage(value, sizeof(value));
-    imui_list_add(w_content, IMUI_ICON_NONE, "CPU 使用率", value);
+    ui_list_add(w_content, UI_ICON_NONE, "CPU 使用率", value);
 
     fill_date_time(value, sizeof(value));
-    imui_list_add(w_content, IMUI_ICON_NONE, "日時", value);
+    ui_list_add(w_content, UI_ICON_NONE, "日時", value);
 
     uint64_t uptime_ms = get_uptime_ms();
     snprintf(value, sizeof(value), "%llu 時間 %llu 分 %llu 秒",
              (unsigned long long)(uptime_ms / 3600000ull),
              (unsigned long long)((uptime_ms / 60000ull) % 60ull),
              (unsigned long long)((uptime_ms / 1000ull) % 60ull));
-    imui_list_add(w_content, IMUI_ICON_NONE, "稼働時間", value);
+    ui_list_add(w_content, UI_ICON_NONE, "稼働時間", value);
 
     snprintf(value, sizeof(value), "%d プロセス", get_process_count());
-    imui_list_add(w_content, IMUI_ICON_NONE, "実行中", value);
+    ui_list_add(w_content, UI_ICON_NONE, "実行中", value);
 }
 
 /* The boot profile the kernel records during early boot: one row per phase
@@ -446,7 +403,7 @@ static void fill_boot(void)
     char value[160];
     int32_t count = get_boot_profile_count();
     if (count <= 0) {
-        imui_list_add(w_content, IMUI_ICON_NONE, "計測データがありません", "");
+        ui_list_add(w_content, UI_ICON_NONE, "計測データがありません", "");
         return;
     }
 
@@ -465,7 +422,7 @@ static void fill_boot(void)
          * phase, so everything before it reads 0 ns), not that it was
          * instantaneous: say so instead of printing a fake 0.0 ms. */
         if (entry.duration_ns == 0u) {
-            imui_list_add(w_content, IMUI_ICON_NONE,
+            ui_list_add(w_content, UI_ICON_NONE,
                           entry.name[0] ? entry.name : "(名称なし)",
                           "—  ·  計測不能（タイマー初期化前）");
             continue;
@@ -480,12 +437,12 @@ static void fill_boot(void)
                  (unsigned long long)(entry.duration_ns / 1000000ull),
                  (unsigned long long)((entry.duration_ns % 1000000ull) / 100000ull),
                  (unsigned)(tenths / 10u), (unsigned)(tenths % 10u));
-        imui_list_add(w_content, IMUI_ICON_NONE,
+        ui_list_add(w_content, UI_ICON_NONE,
                       entry.name[0] ? entry.name : "(名称なし)", value);
     }
     snprintf(value, sizeof(value), "%llu ms  ·  %d フェーズ",
              (unsigned long long)(total_ns / 1000000ull), (int)count);
-    imui_list_add(w_content, IMUI_ICON_NONE, "合計", value);
+    ui_list_add(w_content, UI_ICON_NONE, "合計", value);
 }
 
 static void fill_devices(void)
@@ -498,7 +455,7 @@ static void fill_devices(void)
     };
     uint32_t count = 0u;
     if (os_get_device_count(&count) < 0 || count == 0u) {
-        imui_list_add(w_content, IMUI_ICON_NONE, "デバイスが見つかりません", "");
+        ui_list_add(w_content, UI_ICON_NONE, "デバイスが見つかりません", "");
         return;
     }
     for (uint32_t i = 0; i < count; ++i) {
@@ -510,7 +467,7 @@ static void fill_devices(void)
                      ? kind[device.type] : kind[0],
                  device.vendor_id, device.device_id,
                  device.bus, device.device, device.func);
-        imui_list_add(w_content, IMUI_ICON_NONE,
+        ui_list_add(w_content, UI_ICON_NONE,
                       device.device_name[0] ? device.device_name : "(名称不明)",
                       value);
     }
@@ -520,7 +477,7 @@ static void fill_storage(void)
 {
     uint32_t count = 0u;
     if (os_get_disk_count(&count) < 0 || count == 0u) {
-        imui_list_add(w_content, IMUI_ICON_NONE, "ディスクが見つかりません", "");
+        ui_list_add(w_content, UI_ICON_NONE, "ディスクが見つかりません", "");
         return;
     }
     for (uint32_t i = 0; i < count; ++i) {
@@ -533,7 +490,7 @@ static void fill_storage(void)
                  disk.manufacturer, disk.model, used, total,
                  (disk.flags & SYSTEM_DISK_FLAG_BOOT) ? "  ·  起動ディスク" : "",
                  (disk.flags & SYSTEM_DISK_FLAG_WRITABLE) ? "" : "  ·  読み取り専用");
-        imui_list_add(w_content, IMUI_ICON_DRIVE,
+        ui_list_add(w_content, UI_ICON_DRIVE,
                       disk.disk_name[0] ? disk.disk_name : "(名称不明)", value);
     }
 }
@@ -541,8 +498,8 @@ static void fill_storage(void)
 static void show_pane(pane_t pane)
 {
     g_pane = pane;
-    imui_list_clear(w_content);
-    imui_set_text(g_app, w_title, k_pane_name[pane]);
+    ui_list_clear(w_content);
+    ui_set_text(w_title, k_pane_name[pane]);
     switch (pane) {
     case PANE_APPEARANCE: fill_appearance(); break;
     case PANE_DISPLAY:    fill_display();    break;
@@ -553,15 +510,14 @@ static void show_pane(pane_t pane)
     default: break;
     }
     w_nav->sel = (int32_t)pane;
-    imui_request_paint(g_app);
+    ui_redraw();
 }
 
 /* Refilling the system pane on a timer throws the scroll offset away, so it
  * is put back: a pane you have read down should not jump to the top every
  * second while you are reading it. */
-static void on_tick(imui_app_t *app, imui_widget_t *w, void *user)
+static void on_tick(void)
 {
-    (void)app; (void)w; (void)user;
     if (g_pane != PANE_SYSTEM) return;
 
     uint64_t now = get_uptime_ms();
@@ -582,27 +538,24 @@ static void on_tick(imui_app_t *app, imui_widget_t *w, void *user)
  * too: Right steps into the pane's contents, Left back out to the panes.
  * Without it a pointerless session could change panes but never scroll or
  * activate a row inside one. */
-static bool on_key(imui_app_t *app, const input_keyboard_event_t *ev)
+static bool on_key(const input_keyboard_event_t *ev)
 {
-    if (ev->keycode == KEY_RIGHT && app->focus == w_nav) {
-        app->focus = w_content;
+    if (ev->keycode == KEY_RIGHT && g_app->focus == w_nav) {
+        ui_focus(w_content);
         if (w_content->sel < 0 && w_content->row_count > 0u)
             w_content->sel = 0;
-        app->needs_paint = true;
         return true;
     }
-    if (ev->keycode == KEY_LEFT && app->focus == w_content) {
-        app->focus = w_nav;
-        app->needs_paint = true;
+    if (ev->keycode == KEY_LEFT && g_app->focus == w_content) {
+        ui_focus(w_nav);
         return true;
     }
     return false;
 }
 
-static void on_nav(imui_app_t *app, imui_widget_t *w, void *user)
+static void on_nav(ui_widget_t *w)
 {
-    (void)app; (void)user;
-    int row = imui_list_selected(w);
+    int row = w->sel;
     if (row < 0 || row >= (int)PANE_COUNT) return;
     show_pane((pane_t)row);
 }
@@ -610,10 +563,9 @@ static void on_nav(imui_app_t *app, imui_widget_t *w, void *user)
 /* The appearance pane is a list of actions rather than of facts, so a row
  * being chosen there means something. Everything the other panes list is
  * read-only. */
-static void on_content(imui_app_t *app, imui_widget_t *w, void *user)
+static void on_content(ui_widget_t *w)
 {
-    (void)app; (void)user;
-    int row = imui_list_selected(w);
+    int row = w->sel;
     if (row < 0) return;
 
     if (g_pane == PANE_DISPLAY) {
@@ -651,14 +603,17 @@ static void on_content(imui_app_t *app, imui_widget_t *w, void *user)
 
     if (g_pane != PANE_APPEARANCE || row <= 0) return;
 
-    uint32_t seed_row = (uint32_t)row - 1u;      /* row 0 is the heading */
-    if (seed_row < SEED_COUNT) {
-        on_pick_seed(NULL, NULL, (void *)(uintptr_t)seed_row);
-    } else {
-        uint32_t after = seed_row - SEED_COUNT;  /* heading, light, dark, wallpaper */
-        if (after == 1u)      on_pick_mode(NULL, NULL, (void *)(uintptr_t)0u);
-        else if (after == 2u) on_pick_mode(NULL, NULL, (void *)(uintptr_t)1u);
-        else if (after == 3u) on_reload_wallpaper(NULL, NULL, NULL);
+    uint32_t accent_row = (uint32_t)row - 1u;    /* row 0 is the heading */
+    uint32_t after = accent_row - ACCENT_COUNT;  /* heading, light, dark, wallpaper */
+    if (accent_row < ACCENT_COUNT) {
+        g_accent = k_accents[accent_row].accent;
+        apply_theme();
+    } else if (after == 1u || after == 2u) {
+        g_dark = after == 2u;
+        apply_theme();
+    } else if (after == 3u) {
+        window_reload_background();
+        status("壁紙を読み込み直しました。");
     }
     show_pane(PANE_APPEARANCE);
 }
@@ -669,7 +624,7 @@ int _start(void);
 int _start(void)
 {
     serial_write_string("[settings] start\n");
-    g_app = imui_create(900, 620, "Settings");
+    g_app = ui_create(900, 620, "Settings");
     if (!g_app) {
         serial_write_string("[settings] no window\n");
         for (;;) {}
@@ -677,36 +632,33 @@ int _start(void)
 
     /* Start from whatever the desktop is themed to, so the pane marks the
      * current choice as in use rather than always claiming the default. */
-    m3_get_desktop_theme(&g_seed, &g_dark);
+    theme_get_desktop(&g_accent, &g_dark);
 
-    imui_widget_t *root = g_app->root;
-    root->kind = IMUI_COL; root->pad = 0; root->gap = 0;
+    ui_widget_t *root = g_app->root;
 
-    imui_widget_t *header = imui_container(root, IMUI_ROW, 16, 8);
-    header->grow = 0; header->min_h = 72; header->fill_bg = true;
-    imui_set_variant(header, IMUI_FILLED);
-    w_title = imui_set_type_role(imui_label(header, "外観"), IMUI_HEADLINE);
+    ui_widget_t *header = ui_bar(root, 72);
+    header->pad = 16; header->gap = 8;
+    w_title = ui_title(header, "外観");
     w_title->grow = 1;
 
-    imui_widget_t *body = imui_container(root, IMUI_ROW, 12, 12);
+    ui_widget_t *body = ui_row(root, 12, 12);
     body->grow = 1;
 
-    w_nav = imui_list(body);
+    w_nav = ui_list(body);
     w_nav->grow = 0; w_nav->min_w = 240;
-    w_nav->on_activate = on_nav;
-    imui_set_single_click(w_nav, true);
+    w_nav->on_action = on_nav;
+    w_nav->single_click = true;
     for (uint32_t i = 0; i < PANE_COUNT; ++i)
-        imui_list_add(w_nav, k_pane_icon[i], k_pane_name[i], k_pane_note[i]);
+        ui_list_add(w_nav, k_pane_icon[i], k_pane_name[i], k_pane_note[i]);
 
-    w_content = imui_list(body);
+    w_content = ui_list(body);
     w_content->grow = 1;
-    w_content->on_activate = on_content;
-    imui_set_single_click(w_content, true);
+    w_content->on_action = on_content;
+    w_content->single_click = true;
 
-    imui_widget_t *status_bar = imui_container(root, IMUI_ROW, 12, 0);
-    status_bar->grow = 0; status_bar->min_h = 28; status_bar->fill_bg = true;
-    imui_set_variant(status_bar, IMUI_FILLED);
-    w_status = imui_set_type_role(imui_label(status_bar, ""), IMUI_LABEL_SMALL);
+    ui_widget_t *status_bar = ui_bar(root, 28);
+    status_bar->pad = 12; status_bar->gap = 0;
+    w_status = ui_caption(status_bar, "");
     w_status->grow = 1;
 
     show_pane(PANE_APPEARANCE);
@@ -715,6 +667,6 @@ int _start(void)
     /* The pane list takes the keyboard on startup: arrows and Enter then
      * reach the panes without the pointer having to be over them. */
     w_nav->sel = 0;
-    g_app->focus = w_nav;
-    return imui_run(g_app);
+    ui_focus(w_nav);
+    ui_run();
 }

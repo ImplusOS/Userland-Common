@@ -10,7 +10,7 @@
 #include "../../../../Userland/API/Source/Graphics.h"
 #include "../../../../Userland/API/Source/WM_Protocol.h"
 #include "../../../../Userland/API/Source/WiFi.h"
-#include "../../../API/Source/Material.h"
+#include "../../../API/Source/Theme.h"
 
 #define WM_MAX_WINDOWS                 128u
 #define WM_MAX_INPUT_SUBSCRIPTIONS     32u
@@ -28,18 +28,18 @@
 #define WM_APP_ARG_MAX                 256u
 #define WM_APP_COMMENT_MAX             96u
 #define WM_THEME_PATH_MAX              128u
-#define WM_XML_MAX_BYTES               (256u * 1024u)
 #define WM_SURFACE_MAX_BYTES           (16u * 1024u * 1024u)
 
 #define WM_TASKBAR_AT_TOP              0
 
-/* Shell metrics, in Material Design 3 terms. The window frame is an M3
- * "large" shape carrying level-3 elevation; its title bar holds a row of
- * 32px icon buttons, which is the size M3 gives an icon button on a
- * pointer-driven surface, at the compact end of the range M3 allows. */
+/* Shell metrics (defaults; a .theme file's [Metrics] section overrides). */
 #define WM_TITLE_HEIGHT                32u
-#define WM_CORNER_RADIUS               M3_SHAPE_MEDIUM
+#define WM_CORNER_RADIUS               THEME_RADIUS
 #define WM_SHADOW_SIZE                 8u
+/* Drop-shadow spread under raised surfaces: menus, dialogs and panels, and
+ * the smaller notification cards. */
+#define WM_SHADOW_POPUP                10u
+#define WM_SHADOW_CARD                  6u
 #define WM_DOCK_HEIGHT                 40u
 #define WM_DOCK_MARGIN                 0u
 #define WM_TITLE_BUTTON_SIZE           26u
@@ -124,7 +124,6 @@ typedef enum {
     WM_TRANSITION_NONE = 0,
     WM_TRANSITION_SHOW,
     WM_TRANSITION_CLOSE,
-    WM_TRANSITION_HIDE,
     WM_TRANSITION_MINIMIZE,
     WM_TRANSITION_RESTORE
 } wm_transition_t;
@@ -137,24 +136,14 @@ typedef enum {
     WM_CURSOR_RESIZE_DIAGONAL_NE_SW
 } wm_cursor_style_t;
 
-/* The shell's Material Design 3 theme: one seed colour expanded into the
- * full set of M3 colour roles, the M3 type scale, and the handful of
- * metrics that are the shell's own rather than the specification's.
- *
- * Nothing here is a one-off colour. Every surface, outline and piece of
- * text the window manager paints names a role in `color`, so retinting the
- * desktop is a matter of changing `seed` -- which is what the WM_SET_THEME
- * message and the [Material] section of a .theme file both do. */
+/* The shell's theme: the shared desktop palette (Theme.h) plus the metrics
+ * that are the shell's own. */
 typedef struct {
-    uint32_t seed;                 /* source colour for the tonal palettes */
-    bool dark;                     /* which of the two schemes was built   */
-    m3_scheme_t color;          /* the M3 colour roles                  */
-    m3_typescale_t type;        /* the M3 type scale, in pixels         */
-    float type_scale;              /* multiplier applied to that scale     */
+    theme_t color;                 /* palette, built from accent + mode    */
 
     uint32_t title_height;         /* window title bar                     */
-    uint32_t corner_radius;        /* window shape token                   */
-    uint32_t shadow_size;          /* window elevation spread              */
+    uint32_t corner_radius;        /* window corners                       */
+    uint32_t shadow_size;          /* window shadow spread                 */
     uint32_t dock_height;          /* navigation bar (taskbar)             */
 } wm_theme_t;
 
@@ -203,15 +192,6 @@ typedef struct wm_window {
     int32_t surface_shared_memory_handle;
     bool surface_opaque;
     wm_region_t damage;
-    uint32_t transaction_depth;
-    bool transaction_dirty;
-
-    char *xml_buffer;
-    uint32_t xml_size;
-    uint32_t xml_capacity;
-
-    uint32_t icon[32u * 32u];
-    bool has_icon;
 
     uint8_t *shadow_mask;
     uint32_t shadow_mask_width;
@@ -476,7 +456,6 @@ typedef struct {
     uint32_t taskbar_hover_kind;
     uint32_t taskbar_hover_window_id;
     char clock_text[32];
-    char date_text[16];
     char search_text[WM_SEARCH_MAX];
     uint32_t search_len;
     bool search_active;
@@ -498,3 +477,5 @@ static inline int32_t wm_max_i32(int32_t a, int32_t b) { return a > b ? a : b; }
 static inline int32_t wm_min_i32(int32_t a, int32_t b) { return a < b ? a : b; }
 static inline uint32_t wm_min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
 static inline uint32_t wm_max_u32(uint32_t a, uint32_t b) { return a > b ? a : b; }
+/* Corner radius that makes a w x h box a pill (fully rounded ends). */
+static inline uint32_t wm_pill_radius(uint32_t w, uint32_t h) { return wm_min_u32(w, h) / 2u; }

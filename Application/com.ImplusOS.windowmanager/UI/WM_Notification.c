@@ -190,16 +190,14 @@ static void draw_notification_card(wm_state_t *state, wm_canvas_t *canvas,
                                    const char *message, uint8_t opacity,
                                    bool progress, uint32_t remaining_width)
 {
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
-    uint32_t radius = m3_shape_radius(M3_SHAPE_LARGE, card.w, card.h);
-    uint32_t container = m3_elevated(m3, m3->surface_container_low,
-                                        M3_ELEVATION_2);
+    const theme_t *th = &state->theme.color;
+    uint32_t radius = THEME_RADIUS_LARGE;
+    uint32_t container = th->surface;
 
-    wm_canvas_elevation_shadow(canvas, card, radius, M3_ELEVATION_2,
-                               m3_alpha(m3->shadow, 22u), opacity);
+    wm_canvas_shadow(canvas, card, radius, WM_SHADOW_CARD,
+                               color_alpha(0xFF000000u, 22u), opacity);
     wm_canvas_fill_rounded(canvas, card, radius,
-        apply_opacity(m3->outline_variant, opacity));
+        apply_opacity(th->border, opacity));
     wm_canvas_fill_rounded(canvas,
         (wm_rect_t){card.x + 1, card.y + 1, card.w - 2u, card.h - 2u},
         radius > 0u ? radius - 1u : 0u, apply_opacity(container, opacity));
@@ -207,22 +205,22 @@ static void draw_notification_card(wm_state_t *state, wm_canvas_t *canvas,
     wm_rect_t badge = {card.x + 16, card.y + (int32_t)(card.h - 36u) / 2 - 4,
                        36u, 36u};
     wm_canvas_fill_rounded(canvas, badge,
-        m3_shape_radius(M3_SHAPE_FULL, badge.w, badge.h),
-        apply_opacity(m3->secondary_container, opacity));
+        wm_pill_radius(badge.w, badge.h),
+        apply_opacity(th->accent_soft, opacity));
     wm_icon_draw(canvas,
         (wm_rect_t){badge.x + 9, badge.y + 9, 18u, 18u},
         WM_ICON_NOTIFICATIONS,
-        apply_opacity(m3->on_secondary_container, opacity));
+        apply_opacity(th->text, opacity));
 
     int32_t text_x = card.x + 66;
     uint32_t text_max = card.w > 82u ? card.w - 82u : 0u;
     wm_font_draw(&state->font, canvas, text_x, card.y + 18,
-                 title, apply_opacity(m3->on_surface, opacity),
-                 type->title_small, text_max);
+                 title, apply_opacity(th->text, opacity),
+                 THEME_FONT_BODY, text_max);
     wm_font_draw(&state->font, canvas, text_x,
-                 card.y + 18 + (int32_t)(type->title_small + 0.5f) + 6,
-                 message, apply_opacity(m3->on_surface_variant, opacity),
-                 type->body_small, text_max);
+                 card.y + 18 + (int32_t)(THEME_FONT_BODY + 0.5f) + 6,
+                 message, apply_opacity(th->text_dim, opacity),
+                 THEME_FONT_SMALL, text_max);
 
     if (progress) {
         /* M3 linear progress indicator: a full-shape track in
@@ -230,11 +228,11 @@ static void draw_notification_card(wm_state_t *state, wm_canvas_t *canvas,
         wm_rect_t track = {card.x + 16, card.y + (int32_t)card.h - 12,
                            card.w - 32u, 4u};
         wm_canvas_fill_rounded(canvas, track, 2u,
-            apply_opacity(m3->secondary_container, opacity));
+            apply_opacity(th->accent_soft, opacity));
         if (remaining_width > track.w) remaining_width = track.w;
         wm_canvas_fill_rounded(canvas,
             (wm_rect_t){track.x, track.y, remaining_width, track.h}, 2u,
-            apply_opacity(m3->primary, opacity));
+            apply_opacity(th->accent, opacity));
     }
 }
 
@@ -281,8 +279,7 @@ static void draw_popups(wm_state_t *state, wm_canvas_t *canvas, uint64_t now_ms)
 static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
 {
     if (!state->notification_center_open) return;
-    const m3_scheme_t *m3 = &state->theme.color;
-    const m3_typescale_t *type = &state->theme.type;
+    const theme_t *th = &state->theme.color;
     wm_rect_t panel = wm_notification_center_rect(state);
     wm_rect_t halo = {panel.x - 12, panel.y - 6, panel.w + 24u, panel.h + 24u};
     if (!wm_rect_intersects(halo, canvas->clip)) return;
@@ -290,38 +287,36 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
     if (state->notification_center_scroll > max_scroll)
         state->notification_center_scroll = max_scroll;
 
-    uint32_t radius = m3_shape_radius(M3_SHAPE_EXTRA_LARGE,
-                                         panel.w, panel.h);
-    uint32_t container = m3_elevated(m3, m3->surface_container,
-                                        M3_ELEVATION_3);
+    uint32_t radius = THEME_RADIUS_LARGE;
+    uint32_t container = th->surface;
 
-    wm_canvas_elevation_shadow(canvas, panel, radius, M3_ELEVATION_3,
-                               m3_alpha(m3->shadow, 22u), 255u);
-    wm_canvas_fill_rounded(canvas, panel, radius, m3->outline_variant);
+    wm_canvas_shadow(canvas, panel, radius, WM_SHADOW_POPUP,
+                               color_alpha(0xFF000000u, 22u), 255u);
+    wm_canvas_fill_rounded(canvas, panel, radius, th->border);
     wm_canvas_fill_rounded(canvas,
         (wm_rect_t){panel.x + 1, panel.y + 1, panel.w - 2u, panel.h - 2u},
         radius > 0u ? radius - 1u : 0u, container);
 
     wm_rect_t badge = {panel.x + 20, panel.y + 18, 40u, 40u};
     wm_canvas_fill_rounded(canvas, badge,
-        m3_shape_radius(M3_SHAPE_FULL, badge.w, badge.h),
-        m3->secondary_container);
+        wm_pill_radius(badge.w, badge.h),
+        th->accent_soft);
     wm_icon_draw(canvas, (wm_rect_t){badge.x + 10, badge.y + 10, 20u, 20u},
-                 WM_ICON_NOTIFICATIONS, m3->on_secondary_container);
+                 WM_ICON_NOTIFICATIONS, th->text);
 
     uint32_t header_max = panel.w > 96u ? panel.w - 96u : 0u;
     wm_font_draw(&state->font, canvas, panel.x + 72, panel.y + 18,
-                 "通知", m3->on_surface, type->title_large, header_max);
+                 "通知", th->text, THEME_FONT_TITLE, header_max);
     char count_text[32];
     snprintf(count_text, sizeof(count_text), "%u 件",
              state->notification_history_count);
     wm_font_draw(&state->font, canvas, panel.x + 72,
-                 panel.y + 18 + (int32_t)(type->title_large + 0.5f) + 4,
-                 count_text, m3->on_surface_variant, type->label_medium,
+                 panel.y + 18 + (int32_t)(THEME_FONT_TITLE + 0.5f) + 4,
+                 count_text, th->text_dim, THEME_FONT_SMALL,
                  header_max);
     wm_canvas_fill(canvas,
         (wm_rect_t){panel.x + 16, panel.y + 70, panel.w - 32u, 1u},
-        m3->outline_variant);
+        th->border);
 
     wm_rect_t list = {panel.x + 12, panel.y + 84, panel.w - 24u,
                       panel.h > 96u ? panel.h - 96u : 0u};
@@ -330,13 +325,13 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
     if (state->notification_history_count == 0u) {
         wm_icon_draw(canvas,
             (wm_rect_t){list.x + (int32_t)list.w / 2 - 16, list.y + 28, 32u, 32u},
-            WM_ICON_NOTIFICATIONS, m3->outline);
+            WM_ICON_NOTIFICATIONS, th->border);
         const char *empty = "通知はありません";
-        uint32_t empty_w = wm_font_measure(&state->font, empty, type->body_medium);
+        uint32_t empty_w = wm_font_measure(&state->font, empty, THEME_FONT_BODY);
         wm_font_draw(&state->font, canvas,
                      list.x + ((int32_t)list.w - (int32_t)empty_w) / 2,
-                     list.y + 76, empty, m3->on_surface_variant,
-                     type->body_medium, list.w);
+                     list.y + 76, empty, th->text_dim,
+                     THEME_FONT_BODY, list.w);
     } else {
         int32_t y = list.y - (int32_t)(state->notification_center_scroll * 76u);
         for (uint32_t display = 0u; display < state->notification_history_count; ++display) {
@@ -347,24 +342,24 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
             wm_rect_t card = {list.x, y, list.w, 68u};
             if (wm_rect_intersects(card, list)) {
                 wm_canvas_fill_rounded(canvas, card,
-                    m3_shape_radius(M3_SHAPE_MEDIUM, card.w, card.h),
-                    m3->surface_container_high);
+                    THEME_RADIUS,
+                    th->surface);
                 wm_rect_t dot = {card.x + 12, card.y + (int32_t)(card.h - 32u) / 2,
                                  32u, 32u};
                 wm_canvas_fill_rounded(canvas, dot,
-                    m3_shape_radius(M3_SHAPE_FULL, dot.w, dot.h),
-                    m3->secondary_container);
+                    wm_pill_radius(dot.w, dot.h),
+                    th->accent_soft);
                 wm_icon_draw(canvas,
                     (wm_rect_t){dot.x + 8, dot.y + 8, 16u, 16u},
-                    WM_ICON_NOTIFICATIONS, m3->on_secondary_container);
+                    WM_ICON_NOTIFICATIONS, th->text);
                 uint32_t item_max = card.w > 72u ? card.w - 72u : 0u;
                 wm_font_draw(&state->font, canvas, card.x + 56, card.y + 14,
-                             item->title, m3->on_surface, type->title_small,
+                             item->title, th->text, THEME_FONT_BODY,
                              item_max);
                 wm_font_draw(&state->font, canvas, card.x + 56,
-                             card.y + 14 + (int32_t)(type->title_small + 0.5f) + 6,
-                             item->message, m3->on_surface_variant,
-                             type->body_small, item_max);
+                             card.y + 14 + (int32_t)(THEME_FONT_BODY + 0.5f) + 6,
+                             item->message, th->text_dim,
+                             THEME_FONT_SMALL, item_max);
             }
             y += 76;
         }

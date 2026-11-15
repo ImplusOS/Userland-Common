@@ -98,16 +98,6 @@ static void layer_push_top(wm_scene_t *scene, wm_window_t *window, wm_layer_t la
     scene->layer_top[layer] = window;
 }
 
-static void layer_push_bottom(wm_scene_t *scene, wm_window_t *window, wm_layer_t layer)
-{
-    window->layer = layer;
-    window->z_next = NULL;
-    window->z_prev = scene->layer_bottom[layer];
-    if (scene->layer_bottom[layer]) scene->layer_bottom[layer]->z_next = window;
-    else scene->layer_top[layer] = window;
-    scene->layer_bottom[layer] = window;
-}
-
 void wm_scene_init(wm_scene_t *scene)
 {
     if (scene) memset(scene, 0, sizeof(*scene));
@@ -291,7 +281,7 @@ int32_t wm_scene_create_window(wm_state_t *state, int32_t owner_pid,
     layer_push_top(&state->scene, window, WM_LAYER_NORMAL);
     wm_scene_focus(state, window);
     if (animate_show) {
-        wm_animation_start(state, window, WM_TRANSITION_SHOW, M3_DURATION_MEDIUM_4);
+        wm_animation_start(state, window, WM_TRANSITION_SHOW, WM_ANIM_OPEN_MS);
     }
     wm_window_mark_frame_damage(state, window);
     return (int32_t)id;
@@ -333,7 +323,6 @@ void wm_scene_destroy_immediate(wm_state_t *state, uint32_t id)
     } else {
         free(window->surface);
     }
-    free(window->xml_buffer);
     free(window->shadow_mask);
     free(window);
     if (state->scene.focused_id == 0u) wm_scene_focus_next(state, id);
@@ -371,7 +360,7 @@ void wm_scene_destroy_window(wm_state_t *state, uint32_t id)
     }
     window->close_requested = true;
     if (state->scene.focused_id == id) wm_scene_focus_next(state, id);
-    wm_animation_start(state, window, WM_TRANSITION_CLOSE, M3_DURATION_SHORT_4);
+    wm_animation_start(state, window, WM_TRANSITION_CLOSE, WM_ANIM_HIDE_MS);
 }
 
 bool wm_scene_set_frame(wm_state_t *state, wm_window_t *window, wm_rect_t frame)
@@ -422,21 +411,14 @@ void wm_scene_show(wm_state_t *state, wm_window_t *window)
     window->visible = true;
     window->minimized = false;
     window->close_requested = false;
-    wm_animation_start(state, window, WM_TRANSITION_SHOW, M3_DURATION_MEDIUM_2);
-}
-
-void wm_scene_hide(wm_state_t *state, wm_window_t *window)
-{
-    if (!state || !window || !window->visible) return;
-    if (state->scene.focused_id == window->id) wm_scene_focus_next(state, window->id);
-    wm_animation_start(state, window, WM_TRANSITION_HIDE, M3_DURATION_SHORT_4);
+    wm_animation_start(state, window, WM_TRANSITION_SHOW, WM_ANIM_SHOW_MS);
 }
 
 void wm_scene_minimize(wm_state_t *state, wm_window_t *window)
 {
     if (!state || !window || window->minimized) return;
     if (state->scene.focused_id == window->id) wm_scene_focus_next(state, window->id);
-    wm_animation_start(state, window, WM_TRANSITION_MINIMIZE, M3_DURATION_SHORT_4);
+    wm_animation_start(state, window, WM_TRANSITION_MINIMIZE, WM_ANIM_HIDE_MS);
 }
 
 void wm_scene_restore(wm_state_t *state, wm_window_t *window)
@@ -446,7 +428,7 @@ void wm_scene_restore(wm_state_t *state, wm_window_t *window)
     window->minimized = false;
     wm_scene_raise(state, window);
     wm_scene_focus(state, window);
-    wm_animation_start(state, window, WM_TRANSITION_RESTORE, M3_DURATION_MEDIUM_2);
+    wm_animation_start(state, window, WM_TRANSITION_RESTORE, WM_ANIM_SHOW_MS);
 }
 
 void wm_scene_raise(wm_state_t *state, wm_window_t *window)
@@ -456,16 +438,6 @@ void wm_scene_raise(wm_state_t *state, wm_window_t *window)
     wm_layer_t layer = window->layer;
     layer_remove(&state->scene, window);
     layer_push_top(&state->scene, window, layer);
-    wm_window_mark_frame_damage(state, window);
-}
-
-void wm_scene_lower(wm_state_t *state, wm_window_t *window)
-{
-    if (!state || !window || state->scene.layer_bottom[window->layer] == window) return;
-    wm_window_mark_frame_damage(state, window);
-    wm_layer_t layer = window->layer;
-    layer_remove(&state->scene, window);
-    layer_push_bottom(&state->scene, window, layer);
     wm_window_mark_frame_damage(state, window);
 }
 
@@ -608,25 +580,6 @@ void wm_window_damage_content(wm_state_t *state, wm_window_t *window, wm_rect_t 
     wm_rect_t clipped = wm_rect_intersection(rect, content_bounds(window));
     if (clipped.w == 0u || clipped.h == 0u) return;
     wm_region_add(&window->damage, clipped, content_bounds(window));
-    if (window->transaction_depth != 0u) {
-        window->transaction_dirty = true;
-        return;
-    }
     mark_content_damage_on_screen(state, window, clipped);
 }
 
-void wm_window_end_transaction(wm_state_t *state, wm_window_t *window)
-{
-    if (!state || !window || window->transaction_depth == 0u) return;
-    --window->transaction_depth;
-    if (window->transaction_depth == 0u && window->transaction_dirty) {
-        window->transaction_dirty = false;
-        if (window->damage.full) {
-            mark_content_damage_on_screen(state, window, content_bounds(window));
-        } else {
-            for (uint32_t i = 0u; i < window->damage.count; ++i)
-                mark_content_damage_on_screen(state, window,
-                                              window->damage.rects[i]);
-        }
-    }
-}

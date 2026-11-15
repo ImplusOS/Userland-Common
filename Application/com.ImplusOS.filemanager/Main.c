@@ -1,6 +1,6 @@
 /*
  * com.ImplusOS.filemanager -- a Windows 10 Explorer style file browser
- * built on the ImUI toolkit.
+ * built on the UI toolkit.
  *
  *   [<] [>] [^]  ( path .......................... )  [refresh]
  *   名前 [ ................ ] [新規フォルダー] [名前変更] [削除]
@@ -26,7 +26,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "ImUI.h"
+#include "UI.h"
 #include "File.h"
 #include "Process.h"
 #include "Serial.h"
@@ -50,8 +50,8 @@ static char        g_cwd[PATH_MAX] = "/";
 static char        g_hist[HIST_MAX][PATH_MAX];
 static int         g_hist_n, g_hist_i;
 
-static imui_widget_t *w_path, *w_list, *w_status, *w_name;
-static imui_app_t    *g_app;
+static ui_widget_t *w_path, *w_list, *w_status, *w_name;
+static ui_app_t    *g_app;
 
 /* Delete's confirmation window, as in the editor. */
 static uint64_t g_arm_ms;
@@ -102,8 +102,8 @@ static bool is_text_name(const char *n) {
 }
 
 static void status(const char *text) {
-    imui_set_text(g_app, w_status, text);
-    imui_request_paint(g_app);
+    ui_set_text(w_status, text);
+    ui_redraw();
 }
 
 static void status_fmt(const char *fmt, const char *arg) {
@@ -133,7 +133,7 @@ static void join_path(const char *base, const char *name, char *out, size_t n) {
 /* Copy the selection out of the list, if there is one. Returns false when
  * nothing is selected or the row is the parent-folder link. */
 static bool selected_name(char *out, size_t n) {
-    int sel = imui_list_selected(w_list);
+    int sel = w_list->sel;
     if (sel < 0 || sel >= (int)w_list->row_count) return false;
     const char *label = w_list->rows[sel].text;
     if (strcmp(label, "..") == 0) return false;
@@ -153,7 +153,7 @@ static int ent_cmp(const void *a, const void *b) {
 }
 
 static void load_dir(const char *path) {
-    imui_list_clear(w_list);
+    ui_list_clear(w_list);
 
     int32_t d = file_opendir(path);
     static entry_t ents[1024];
@@ -183,16 +183,16 @@ static void load_dir(const char *path) {
     qsort(ents, n, sizeof(entry_t), ent_cmp);
 
     if (strcmp(path, "/") != 0)
-        imui_list_add(w_list, IMUI_ICON_UP, "..", "Parent folder");
+        ui_list_add(w_list, UI_ICON_UP, "..", "Parent folder");
 
     uint32_t folders = 0, files = 0;
     for (uint32_t i = 0; i < n; ++i) {
         if (ents[i].dir) {
-            imui_list_add(w_list, IMUI_ICON_FOLDER, ents[i].name, "Folder");
+            ui_list_add(w_list, UI_ICON_FOLDER, ents[i].name, "Folder");
             folders++;
         } else {
             char sz[32]; human_size(ents[i].size, sz, sizeof(sz));
-            imui_list_add(w_list, is_text_name(ents[i].name) ? IMUI_ICON_EDIT : IMUI_ICON_FILE,
+            ui_list_add(w_list, is_text_name(ents[i].name) ? UI_ICON_EDIT : UI_ICON_FILE,
                           ents[i].name, sz);
             files++;
         }
@@ -206,9 +206,9 @@ static void load_dir(const char *path) {
         /* An unreadable directory used to look exactly like an empty one. */
         snprintf(st, sizeof(st), "開けません: %s", path);
     }
-    imui_set_text(g_app, w_status, st);
-    imui_set_text(g_app, w_path, path);
-    imui_request_paint(g_app);
+    ui_set_text(w_status, st);
+    ui_set_text(w_path, path);
+    ui_redraw();
 }
 
 /* As load_dir, but keeping where the user was looking -- a refresh that
@@ -259,39 +259,37 @@ static bool navigate(const char *path, bool push) {
 
 /* ---- callbacks ---- */
 
-static void on_back(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_back(ui_widget_t *w) {
+    (void)w;
     if (g_hist_i > 0 && navigate(g_hist[g_hist_i - 1], false)) g_hist_i--;
 }
-static void on_forward(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_forward(ui_widget_t *w) {
+    (void)w;
     if (g_hist_i + 1 < g_hist_n && navigate(g_hist[g_hist_i + 1], false))
         g_hist_i++;
 }
-static void on_up(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_up(ui_widget_t *w) {
+    (void)w;
     char parent[PATH_MAX];
     join_path(g_cwd, "..", parent, sizeof(parent));
     navigate(parent, true);
 }
-static void on_refresh(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_refresh(ui_widget_t *w) {
+    (void)w;
     load_dir_keep_view(g_cwd);
 }
-static void on_path_submit(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)u;
-    navigate(imui_get_text(w), true);
+static void on_path_submit(ui_widget_t *w) {
+    navigate(ui_get_text(w), true);
 }
-static void on_list_activate(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)u;
-    int sel = imui_list_selected(w);
+static void on_list_activate(ui_widget_t *w) {
+    int sel = w->sel;
     if (sel < 0) return;
     const char *label = w->rows[sel].text;
     char full[PATH_MAX];
     join_path(g_cwd, label, full, sizeof(full));
 
     file_stat_t st;
-    if (strcmp(label, "..") == 0) { on_up(a, w, u); return; }
+    if (strcmp(label, "..") == 0) { on_up(w); return; }
     if (file_stat(full, &st) >= 0 && st.exists && st.is_dir) {
         navigate(full, true);
     } else if (is_text_name(label)) {
@@ -300,9 +298,8 @@ static void on_list_activate(imui_app_t *a, imui_widget_t *w, void *u) {
         status_fmt("この種類のファイルは開けません (%s)", label);
     }
 }
-static void on_place(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a;
-    int sel = imui_list_selected(w);
+static void on_place(ui_widget_t *w) {
+    int sel = w->sel;
     if (sel < 0) return;
     const char *paths[] = { HOME_DIR, DOWNLOADS_DIR, "/", "/Userland", "/var",
                             "/run", "/BootManager" };
@@ -318,7 +315,6 @@ static void on_place(imui_app_t *a, imui_widget_t *w, void *u) {
         }
         navigate(p, true);
     }
-    (void)u;
 }
 
 /* ---- file operations ---- */
@@ -326,7 +322,7 @@ static void on_place(imui_app_t *a, imui_widget_t *w, void *u) {
 /* A name typed into the box: non-empty, and without a path separator, so it
  * can only ever name something *inside* the current folder. */
 static bool typed_name(char *out, size_t n) {
-    const char *raw = imui_get_text(w_name);
+    const char *raw = ui_get_text(w_name);
     while (*raw == ' ' || *raw == '\t') raw++;
     size_t len = strlen(raw);
     while (len > 0 && (raw[len - 1] == ' ' || raw[len - 1] == '\t')) len--;
@@ -337,8 +333,8 @@ static bool typed_name(char *out, size_t n) {
     return strchr(out, '/') == NULL;
 }
 
-static void on_new_folder(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_new_folder(ui_widget_t *w) {
+    (void)w;
     char name[256], full[PATH_MAX];
     if (!typed_name(name, sizeof(name))) {
         status("作る名前を入力してください（/ と .. は使えません）");
@@ -354,13 +350,13 @@ static void on_new_folder(imui_app_t *a, imui_widget_t *w, void *u) {
         status_fmt("作成できませんでした (%s)", name);
         return;
     }
-    imui_set_text(g_app, w_name, "");
+    ui_set_text(w_name, "");
     load_dir(g_cwd);
     status_fmt("フォルダーを作成しました (%s)", name);
 }
 
-static void on_rename(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_rename(ui_widget_t *w) {
+    (void)w;
     char old_name[256], new_name[256];
     char old_path[PATH_MAX], new_path[PATH_MAX];
     if (!selected_name(old_name, sizeof(old_name))) {
@@ -383,7 +379,7 @@ static void on_rename(imui_app_t *a, imui_widget_t *w, void *u) {
         status_fmt("変更できませんでした (%s)", old_name);
         return;
     }
-    imui_set_text(g_app, w_name, "");
+    ui_set_text(w_name, "");
     load_dir(g_cwd);
     {
         char msg[320];
@@ -393,8 +389,8 @@ static void on_rename(imui_app_t *a, imui_widget_t *w, void *u) {
     }
 }
 
-static void on_delete(imui_app_t *a, imui_widget_t *w, void *u) {
-    (void)a; (void)w; (void)u;
+static void on_delete(ui_widget_t *w) {
+    (void)w;
     char name[256];
     if (!selected_name(name, sizeof(name))) {
         status("削除する項目をクリックしてください");
@@ -434,68 +430,61 @@ static void on_delete(imui_app_t *a, imui_widget_t *w, void *u) {
 int _start(void);
 int _start(void) {
     serial_write_string("[filemanager] start\n");
-    g_app = imui_create(920, 620, "Files");
+    g_app = ui_create(920, 620, "Files");
     if (!g_app) { serial_write_string("[filemanager] no window\n"); for (;;) {} }
 
     strcpy(g_hist[0], "/");
     g_hist_n = 1;
     g_hist_i = 0;
 
-    imui_widget_t *root = g_app->root;
-    root->kind = IMUI_COL; root->pad = 0; root->gap = 0;
+    ui_widget_t *root = g_app->root;
 
     /* toolbar: where am I, and where have I been */
-    imui_widget_t *tb = imui_container(root, IMUI_ROW, 8, 6);
-    tb->grow = 0; tb->min_h = 72; tb->fill_bg = true;
-    imui_set_variant(tb, IMUI_FILLED);            /* M3 toolbar bar */
-    imui_iconbutton(tb, IMUI_ICON_BACK, on_back, NULL);
-    imui_iconbutton(tb, IMUI_ICON_FORWARD, on_forward, NULL);
-    imui_iconbutton(tb, IMUI_ICON_UP, on_up, NULL);
-    w_path = imui_textbox(tb, "/");
+    ui_widget_t *tb = ui_bar(root, 72);
+    ui_button(tb, NULL, UI_ICON_BACK, on_back, NULL);
+    ui_button(tb, NULL, UI_ICON_FORWARD, on_forward, NULL);
+    ui_button(tb, NULL, UI_ICON_UP, on_up, NULL);
+    w_path = ui_textbox(tb, "/");
     w_path->grow = 1;
-    w_path->on_submit = on_path_submit;
-    imui_iconbutton(tb, IMUI_ICON_REFRESH, on_refresh, NULL);
+    w_path->on_action = on_path_submit;
+    ui_button(tb, NULL, UI_ICON_REFRESH, on_refresh, NULL);
 
     /* toolbar: what to do with a name or a selection */
-    imui_widget_t *op = imui_container(root, IMUI_ROW, 8, 6);
-    op->grow = 0; op->min_h = 64; op->fill_bg = true;
-    imui_set_variant(op, IMUI_FILLED);
-    imui_set_type_role(imui_label(op, "名前"), IMUI_LABEL_SMALL);
-    w_name = imui_textbox(op, "");
+    ui_widget_t *op = ui_bar(root, 64);
+    ui_caption(op, "名前");
+    w_name = ui_textbox(op, "");
     w_name->grow = 1;
     /* Enter is deliberately bound to nothing: folders cannot be deleted
      * yet, so creating one by accident would be permanent. */
-    imui_button(op, "新規フォルダー", IMUI_ICON_NEW, on_new_folder, NULL);
-    imui_button(op, "名前変更", IMUI_ICON_EDIT, on_rename, NULL);
-    imui_set_variant(imui_button(op, "削除", IMUI_ICON_TRASH, on_delete, NULL),
-                     IMUI_TONAL);
+    ui_button(op, "新規フォルダー", UI_ICON_NEW, on_new_folder, NULL);
+    ui_button(op, "名前変更", UI_ICON_EDIT, on_rename, NULL);
+    ui_button(op, "削除", UI_ICON_TRASH, on_delete, NULL);
 
     /* body: places | files */
-    imui_widget_t *body = imui_container(root, IMUI_ROW, 8, 8);
+    ui_widget_t *body = ui_row(root, 8, 8);
     body->grow = 1;
 
-    imui_widget_t *places = imui_list(body);
+    ui_widget_t *places = ui_list(body);
     places->grow = 0; places->min_w = 190;
-    places->on_activate = on_place;
+    places->on_action = on_place;
     /* A sidebar is a set of destinations, not a list to open: one click. */
-    imui_set_single_click(places, true);
-    imui_list_add(places, IMUI_ICON_FOLDER, "Home", HOME_DIR);
-    imui_list_add(places, IMUI_ICON_FOLDER, "Downloads", DOWNLOADS_DIR);
-    imui_list_add(places, IMUI_ICON_DRIVE, "This PC", "/");
-    imui_list_add(places, IMUI_ICON_FOLDER, "Userland", "/Userland");
-    imui_list_add(places, IMUI_ICON_FOLDER, "Var", "/var");
-    imui_list_add(places, IMUI_ICON_FOLDER, "Run", "/run");
-    imui_list_add(places, IMUI_ICON_FOLDER, "BootManager", "/BootManager");
+    places->single_click = true;
+    ui_list_add(places, UI_ICON_FOLDER, "Home", HOME_DIR);
+    ui_list_add(places, UI_ICON_FOLDER, "Downloads", DOWNLOADS_DIR);
+    ui_list_add(places, UI_ICON_DRIVE, "This PC", "/");
+    ui_list_add(places, UI_ICON_FOLDER, "Userland", "/Userland");
+    ui_list_add(places, UI_ICON_FOLDER, "Var", "/var");
+    ui_list_add(places, UI_ICON_FOLDER, "Run", "/run");
+    ui_list_add(places, UI_ICON_FOLDER, "BootManager", "/BootManager");
 
-    w_list = imui_list(body);
+    w_list = ui_list(body);
     w_list->grow = 1;
-    w_list->on_activate = on_list_activate;
+    w_list->on_action = on_list_activate;
 
     /* status bar */
-    imui_widget_t *sb = imui_container(root, IMUI_ROW, 8, 0);
-    sb->grow = 0; sb->min_h = 28; sb->fill_bg = true;
-    imui_set_variant(sb, IMUI_FILLED);
-    w_status = imui_set_type_role(imui_label(sb, ""), IMUI_LABEL_SMALL);
+    ui_widget_t *sb = ui_bar(root, 28);
+    sb->pad = 8; sb->gap = 0;
+    w_status = ui_caption(sb, "");
     w_status->grow = 1;
 
     /* Started with a folder (xdg-open, "Show in folder"): open on it. */
@@ -510,5 +499,5 @@ int _start(void) {
             navigate("/", false);
         }
     }
-    return imui_run(g_app);
+    ui_run();
 }

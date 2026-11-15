@@ -61,18 +61,15 @@ test:
 	@mkdir -p $(TEST_DIR)
 	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/WM_CoreTest \
 		Tests/WM_CoreTest.c Compositor/WM_Damage.c Compositor/WM_Raster.c \
-		Core/WM_Display.c Core/WM_EventQueue.c ../../API/Source/Material.c
+		Core/WM_Display.c Core/WM_EventQueue.c
 	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/WM_DesktopEntryTest \
 		Tests/WM_DesktopEntryTest.c Linux/WM_DesktopEntry.c
-	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/MaterialTest \
-		Tests/MaterialTest.c ../../API/Source/Material.c
 	$(HOST_CC) $(TEST_CFLAGS) -o $(TEST_DIR)/WM_VirglTest \
 		Tests/WM_VirglTest.c Compositor/WM_Virgl.c Compositor/WM_Raster.c \
-		Compositor/WM_Damage.c ../../API/Source/Material.c
+		Compositor/WM_Damage.c
 	@$(TEST_DIR)/WM_CoreTest
 	@$(TEST_DIR)/WM_VirglTest
 	@$(TEST_DIR)/WM_DesktopEntryTest
-	@$(TEST_DIR)/MaterialTest
 
 clean:
 	rm -rf $(BUILD_DIR)

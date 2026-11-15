@@ -20,15 +20,14 @@
  * with the Terminal launcher. If a terminal is already open, this joins that
  * server instead of starting a second one on the same display.
  *
- * Environment variables are this launcher's business, not the kernel's:
- * linux_env_add_doom() below names the IWAD/soundfont and the null audio
- * backends, and xsession_run_env() adds the DISPLAY=:0, XKB_CONFIG_ROOT and
- * Mesa configuration every X client on this display needs
- * (Userland/API/Source/LinuxEnv.c): virgl when the kernel exposes a 3D render
- * node, llvmpipe otherwise. The kernel only supplies the generic defaults
- * (PATH, HOME, locale, XDG_*).
+ * Environment variables are data, not code: Environment/linuxxdoom-x86_64.env
+ * beside this file names the IWAD/soundfont and the null audio backends, and
+ * xsession_run() loads it as the program profile of DOOM_PATH, together with
+ * the x11-client role profile (DISPLAY, XKB_CONFIG_ROOT, Mesa: virgl when the
+ * kernel exposes a 3D render node, llvmpipe otherwise). See
+ * Userland/API/Source/LinuxEnv.h. The kernel only supplies the generic
+ * defaults (PATH, HOME, locale, XDG_*).
  */
-#include "LinuxEnv.h"
 
 #define DOOM_PATH "/Userland/Doom/Resource/linuxxdoom-x86_64"
 
@@ -48,11 +47,7 @@ void _start(void)
         process_exit(1);
     }
 
-    linux_env_t env;
-    linux_env_init(&env);
-    linux_env_add_doom(&env);
-    int32_t status = xsession_run_env(&session, DOOM_PATH, NULL,
-                                      linux_env_entries(&env));
+    int32_t status = xsession_run(&session, DOOM_PATH, NULL);
     if (status < 0) {
         serial_write_string("[doom] could not start linuxxdoom\n");
     }

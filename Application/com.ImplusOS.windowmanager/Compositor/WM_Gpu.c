@@ -600,7 +600,7 @@ static uint64_t window_signature(const wm_window_t *w, uint64_t theme)
 {
     struct {
         uint32_t w, h;
-        uint8_t flags[9];
+        uint8_t flags[8];
     } key;
     memset(&key, 0, sizeof(key));
     key.w = w->frame.w;
@@ -612,11 +612,9 @@ static uint64_t window_signature(const wm_window_t *w, uint64_t theme)
     key.flags[4] = w->hover_maximize;
     key.flags[5] = w->hover_minimize;
     key.flags[6] = w->surface_opaque;
-    key.flags[7] = w->has_icon;
-    key.flags[8] = w->surface != NULL;
+    key.flags[7] = w->surface != NULL;
     uint64_t h = fnv(theme, &key, sizeof(key));
     h = fnv(h, w->title, strnlen(w->title, sizeof(w->title)));
-    if (w->has_icon) h = fnv(h, w->icon, sizeof(w->icon));
     return h;
 }
 
@@ -710,7 +708,6 @@ static bool update_window_layer(wm_state_t *state, wm_window_t *w,
     }
 
     uint64_t signature = window_signature(w, theme);
-    bool in_transaction = w->transaction_depth != 0u;
     if (!e->valid || e->signature != signature) {
         if (!texture_wait_idle(t)) return false;
         /* One texel past the window is cleared too: a scaled draw samples
@@ -720,7 +717,7 @@ static bool update_window_layer(wm_state_t *state, wm_window_t *w,
         if (!texture_upload(t, all)) return false;
         e->signature = signature;
         e->valid = true;
-    } else if (!in_transaction && !wm_region_is_empty(&w->damage)) {
+    } else if (!wm_region_is_empty(&w->damage)) {
         if (!texture_wait_idle(t)) return false;
         wm_rect_t content = {0, 0, w->frame.w, w->frame.h};
         uint32_t n = w->damage.full ? 1u : w->damage.count;
@@ -731,8 +728,7 @@ static bool update_window_layer(wm_state_t *state, wm_window_t *w,
             if (!texture_upload(t, r)) return false;
         }
     }
-    /* A client mid-transaction keeps its damage for the commit. */
-    if (!in_transaction) wm_region_reset(&w->damage);
+    wm_region_reset(&w->damage);
     return true;
 }
 
@@ -806,7 +802,7 @@ static bool update_cursor(wm_state_t *state, uint64_t theme)
     canvas_for(&canvas, t);
     wm_icon_draw_cursor(&canvas, WM_GPU_CURSOR_PAD, WM_GPU_CURSOR_PAD,
                         state->scene.cursor_style, WM_GPU_CURSOR_FILL,
-                        state->theme.color.scrim);
+                        0xFF000000u);
     if (!texture_upload(t, all)) return false;
     g.cursor_style = state->scene.cursor_style;
     g.cursor_theme = theme;

@@ -1,7 +1,6 @@
 #include <stdint.h>
 
 #include "File.h"
-#include "LinuxEnv.h"
 #include "Process.h"
 #include "Serial.h"
 #include "XSession.h"
@@ -79,17 +78,13 @@ void _start(void)
         process_exit(1);
     }
 
-    linux_env_t env;
-    linux_env_init(&env);
-    linux_env_add_wine(&env);
     /* /usr/bin/wine is Debian's POSIX shell wrapper. ImplusOS launches ELF
      * files directly, so enter through Wine's actual Unix ELF loader. */
     const char *args = wine_args();
     /* ImplusOS enters Wine through the real ELF loader. The PE winecfg
      * executable is named explicitly so Wine does not need the distro shell
      * wrapper or its external basename/cut helpers. */
-    int32_t status = xsession_run_env(&session, WINE_LOADER_PATH, args,
-                                      linux_env_entries(&env));
+    int32_t status = xsession_run(&session, WINE_LOADER_PATH, args);
     /* The first start in a fresh prefix runs wineboot to build it, and
      * Wine's initial process gives that only five minutes before carrying on
      * without a prefix -- it then exits with "could not load kernel32.dll"
@@ -100,8 +95,7 @@ void _start(void)
     for (uint32_t retry = 0u; status == WINE_STATUS_PREFIX_NOT_READY &&
                               retry < WINE_PREFIX_RETRIES; ++retry) {
         serial_write_string("[wine] prefix still being built; starting again\n");
-        status = xsession_run_env(&session, WINE_LOADER_PATH, args,
-                                  linux_env_entries(&env));
+        status = xsession_run(&session, WINE_LOADER_PATH, args);
     }
     if (status < 0) serial_write_string("[wine] could not start wine\n");
     xsession_close(&session);

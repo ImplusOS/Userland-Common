@@ -411,7 +411,6 @@ static void output_flush(void)
 {
     if (g_out.hosted) {
         window_damage(g_out.win, 0u, 0u, g_out.w, g_out.h);
-        window_end_transaction(g_out.win);
         return;
     }
 
