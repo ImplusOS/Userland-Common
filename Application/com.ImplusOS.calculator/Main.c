@@ -294,7 +294,7 @@ int _start(void)
 
     ui_widget_t *root = g_app->root;
 
-    ui_widget_t *header = ui_bar(root, 64);
+    ui_widget_t *header = ui_bar(root, 56);
     header->pad = 16; header->gap = 8;
     ui_widget_t *title = ui_title(header, "計算機");
     title->grow = 1;
@@ -305,6 +305,7 @@ int _start(void)
     w_expr = ui_textbox(body, "");
     w_expr->grow = 0;
     w_expr->min_h = 64;
+    w_expr->font = THEME_FONT_TITLE;
     w_expr->on_action = on_equals;
 
     w_history = ui_caption(body, "");

@@ -636,7 +636,7 @@ int _start(void)
 
     ui_widget_t *root = g_app->root;
 
-    ui_widget_t *header = ui_bar(root, 72);
+    ui_widget_t *header = ui_bar(root, 56);
     header->pad = 16; header->gap = 8;
     w_title = ui_title(header, "外観");
     w_title->grow = 1;

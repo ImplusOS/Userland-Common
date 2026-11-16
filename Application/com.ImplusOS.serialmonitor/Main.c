@@ -314,7 +314,7 @@ int _start(void)
 
     ui_widget_t *root = g_app->root;
 
-    ui_widget_t *tb = ui_bar(root, 72);
+    ui_widget_t *tb = ui_bar(root, 52);
     w_pause  = ui_button(tb, "Pause", UI_ICON_NONE, do_pause, NULL);
     ui_button(tb, "Clear", UI_ICON_TRASH, do_clear, NULL);
     ui_button(tb, "Save", UI_ICON_SAVE, do_save, NULL);

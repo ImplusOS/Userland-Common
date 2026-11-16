@@ -440,7 +440,7 @@ int _start(void) {
     ui_widget_t *root = g_app->root;
 
     /* toolbar: where am I, and where have I been */
-    ui_widget_t *tb = ui_bar(root, 72);
+    ui_widget_t *tb = ui_bar(root, 52);
     ui_button(tb, NULL, UI_ICON_BACK, on_back, NULL);
     ui_button(tb, NULL, UI_ICON_FORWARD, on_forward, NULL);
     ui_button(tb, NULL, UI_ICON_UP, on_up, NULL);
@@ -450,7 +450,7 @@ int _start(void) {
     ui_button(tb, NULL, UI_ICON_REFRESH, on_refresh, NULL);
 
     /* toolbar: what to do with a name or a selection */
-    ui_widget_t *op = ui_bar(root, 64);
+    ui_widget_t *op = ui_bar(root, 52);
     ui_caption(op, "名前");
     w_name = ui_textbox(op, "");
     w_name->grow = 1;

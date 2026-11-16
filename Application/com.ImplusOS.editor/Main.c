@@ -195,7 +195,7 @@ int _start(void) {
 
     ui_widget_t *root = g_app->root;
 
-    ui_widget_t *tb = ui_bar(root, 72);
+    ui_widget_t *tb = ui_bar(root, 52);
     ui_button(tb, "New", UI_ICON_NEW, do_new, NULL);
     ui_button(tb, "Open", UI_ICON_OPEN, do_open, NULL);
     /* Saving is what this window is for, so it is the one button that
@@ -218,6 +218,7 @@ int _start(void) {
     w_status->grow = 1;
 
     g_app->on_key = on_key;
+    ui_focus(w_text);       /* typing goes straight into the text */
 
     /* opened as `editor <path>` ? */
     char arg[512] = {0};
