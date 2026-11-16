@@ -56,14 +56,8 @@ typedef struct {
 /* Last-resort list, used only when neither a desktop entry nor apps.list is
  * readable. Everything real is described by a file under Resource/Applications. */
 static const default_app_t default_apps[] = {
-    {"Files", "/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF", "FI",
-     WM_APP_CATEGORY_UTILITY},
-    {"Editor", "/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF", "ED",
-     WM_APP_CATEGORY_OFFICE},
     {"Terminal", "/Userland/Terminal/Terminal.ELF", "TE", WM_APP_CATEGORY_UTILITY},
     {"BusyBox", "/Userland/BusyBox/BusyBox.ELF", "BB", WM_APP_CATEGORY_UTILITY},
-    {"Serial Monitor", "/Userland/com.ImplusOS.serialmonitor/com.ImplusOS.serialmonitor.ELF",
-     "SM", WM_APP_CATEGORY_SYSTEM},
 };
 
 /* Host launcher for a foreign X11 program. It creates the window, brings up

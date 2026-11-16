@@ -11,9 +11,6 @@
 # The user's own arrangement lives in /var/System/desktop.icons and replaces
 # this file wholesale when it exists.
 
-|/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF
 |/Userland/Terminal/Terminal.ELF
-|/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF
 |/Userland/Chromium/Chromium.ELF
 |/Userland/FireFox/FireFox.ELF
-|/Userland/com.ImplusOS.settings/com.ImplusOS.settings.ELF

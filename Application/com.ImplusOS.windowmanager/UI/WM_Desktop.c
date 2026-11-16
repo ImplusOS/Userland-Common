@@ -41,10 +41,6 @@ static wm_icon_kind_t kind_for(const char *label, const char *path,
     (void)label;
     if (strstr(path, "terminal") || strstr(argument, "xterm"))
         return WM_ICON_TERMINAL;
-    if (strstr(path, "editor"))      return WM_ICON_EDIT;
-    if (strstr(path, "filemanager")) return WM_ICON_FOLDER;
-    if (strstr(path, "settings"))    return WM_ICON_SETTINGS;
-    if (strstr(path, "taskmanager")) return WM_ICON_MEMORY;
     if (strstr(path, "linuxapp") || strstr(path, "gtk3demo"))
         return WM_ICON_APPS;
     return WM_ICON_DOC;

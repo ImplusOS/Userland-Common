@@ -10,8 +10,6 @@
 #   0 system, 1 internet, 2 development, 3 graphics, 4 multimedia,
 #   5 office, 6 game, 7 utility, 8 other. Everything after Badge is
 #   optional; a three-field line written before those existed still parses.
-Files|/Userland/com.ImplusOS.filemanager/com.ImplusOS.filemanager.ELF|FM|7|ファイルとフォルダーを開く
-Editor|/Userland/com.ImplusOS.editor/com.ImplusOS.editor.ELF|ED|7|テキストファイルを編集する
 Terminal|/Userland/Terminal/Terminal.ELF|TE|7|Linux ABI 上の xterm
 BusyBox|/Userland/BusyBox/BusyBox.ELF|BB|7|ネイティブのシェルセッション
 Doom|/Userland/Doom/Doom.ELF|DM|6|無改変の linuxxdoom
@@ -20,7 +18,3 @@ FireFox|/Userland/FireFox/FireFox.ELF|FX|1|無改変の Linux 版 FireFox
 GTK3 Demo|/Userland/com.ImplusOS.gtk3demo/com.ImplusOS.gtk3demo.ELF|GK|2|GTK3 ウィジェット集|/usr/bin/gtk3-demo
 Wayland Compositor|/Userland/com.ImplusOS.waylandcompositor/com.ImplusOS.waylandcompositor.ELF|WL|0|Wayland ディスプレイサーバ
 FastFetch|/Userland/FastFetch/FastFetch.ELF|FF|0|システム情報表示
-Serial Monitor|/Userland/com.ImplusOS.serialmonitor/com.ImplusOS.serialmonitor.ELF|SM|0|COM1 デバッグ出力
-Settings|/Userland/com.ImplusOS.settings/com.ImplusOS.settings.ELF|ST|0|配色とシステム情報
-Calculator|/Userland/com.ImplusOS.calculator/com.ImplusOS.calculator.ELF|Ca|7|式で計算する電卓
-Task Manager|/Userland/com.ImplusOS.taskmanager/com.ImplusOS.taskmanager.ELF|TM|0|プロセス・パフォーマンス・起動時間を確認する
