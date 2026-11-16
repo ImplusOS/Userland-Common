@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Task Manager
-Name[ja]=タスク マネージャー
-Comment=Processes, performance graphs and boot timings
-Comment[ja]=プロセス・パフォーマンス・起動時間を確認する
-Exec=/Userland/com.ImplusOS.taskmanager/com.ImplusOS.taskmanager.ELF
-Icon=utilities-system-monitor
-Categories=System;Monitor;
