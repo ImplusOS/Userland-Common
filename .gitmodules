@@ -2,7 +2,3 @@
 	path = API
 	url = https://github.com/ImplusOS/API.git
 	branch = main
-[submodule "Service"]
-	path = Service
-	url = https://github.com/ImplusOS/Service-Management.git
-	branch = main
