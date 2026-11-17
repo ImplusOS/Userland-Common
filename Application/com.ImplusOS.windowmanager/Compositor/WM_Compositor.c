@@ -6,7 +6,6 @@
 #include "../Decoration/WM_Decoration.h"
 #include "../SceneGraph/WM_Node.h"
 #include "../UI/WM_Notification.h"
-#include "../UI/WM_Dialog.h"
 #include "../UI/WM_StartMenu.h"
 #include "../UI/WM_Taskbar.h"
 #include "../UI/WM_Icons.h"
@@ -419,7 +418,6 @@ void wm_compositor_render(wm_state_t *state, uint64_t now_ms)
         wm_start_menu_draw(state, &canvas);
         wm_notification_draw(state, &canvas, now_ms);
         wm_wifi_panel_draw(state, &canvas);
-        wm_dialog_draw(state, &canvas);
     }
 
     draw_cursor_on_shadow(state);

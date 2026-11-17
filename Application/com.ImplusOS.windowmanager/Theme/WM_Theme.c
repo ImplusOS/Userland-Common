@@ -5,9 +5,44 @@
 #include <stdlib.h>
 #include <string.h>
 
-void wm_theme_set_accent(wm_theme_t *theme, uint32_t accent, bool dark)
+/* `c` as a pure grey of the same brightness, alpha kept. */
+static uint32_t to_grey(uint32_t c)
 {
-    if (theme) theme_init(&theme->color, accent, dark);
+    uint32_t l = (((c >> 16) & 0xFFu) * 299u + ((c >> 8) & 0xFFu) * 587u +
+                  (c & 0xFFu) * 114u) / 1000u;
+    return (c & 0xFF000000u) | (l << 16) | (l << 8) | l;
+}
+
+/*
+ * The shell draws in white and greys only: the shared palette is built as
+ * usual (so the light/dark surfaces stay the same), then the accent and the
+ * danger colour are swapped for fixed greys and every entry is stripped of
+ * its hue. Applications drawing with UI.h keep the coloured accent; this
+ * only affects the window manager's own UI.
+ */
+static void wm_theme_set_accent(wm_theme_t *theme, uint32_t accent, bool dark)
+{
+    if (!theme) return;
+    theme_t *t = &theme->color;
+    theme_init(t, accent, dark);
+    if (dark) {
+        t->accent    = 0xFFC8C8C8u;
+        t->on_accent = 0xFF111111u;
+        t->danger    = 0xFFB4B4B4u;
+        t->on_danger = 0xFF111111u;
+    } else {
+        t->accent    = 0xFF5F5F5Fu;
+        t->on_accent = 0xFFFFFFFFu;
+        t->danger    = 0xFF404040u;
+        t->on_danger = 0xFFFFFFFFu;
+    }
+    t->accent_soft = color_mix(t->surface, t->accent, dark ? 30u : 16u);
+
+    uint32_t *all[] = { &t->accent, &t->on_accent, &t->accent_soft, &t->bg,
+                        &t->surface, &t->surface_alt, &t->border, &t->text,
+                        &t->text_dim, &t->danger, &t->on_danger };
+    for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i)
+        *all[i] = to_grey(*all[i]);
 }
 
 void wm_theme_set_defaults(wm_theme_t *theme)

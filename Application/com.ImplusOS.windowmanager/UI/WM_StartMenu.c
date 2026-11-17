@@ -5,6 +5,7 @@
 #include "WM_Taskbar.h"
 #include "WM_Icons.h"
 #include "../Core/WM_Assets.h"
+#include "../Animation/WM_Animation.h"
 #include "../Linux/WM_DesktopEntry.h"
 #include "../../../../Userland/API/Source/Process.h"
 #include "../../../../Userland/API/Source/File.h"
@@ -66,15 +67,6 @@ static bool app_matches(const wm_launcher_app_t *app, const char *query)
            str_icontains(wm_app_category_label(app->category), query);
 }
 
-/* The line under an app's name: what it does, or failing that what kind of
- * thing it is. */
-static const char *app_subtitle(const wm_launcher_app_t *app)
-{
-    if (app->comment[0]) return app->comment;
-    if (app->category != WM_APP_CATEGORY_OTHER)
-        return wm_app_category_label(app->category);
-    return app->linux_backed ? "Linux アプリケーション" : "アプリケーション";
-}
 
 bool wm_start_menu_input_char(wm_state_t *state, char ch)
 {
@@ -82,7 +74,7 @@ bool wm_start_menu_input_char(wm_state_t *state, char ch)
     if (ch < 0x20 || state->search_len >= WM_SEARCH_MAX - 1u) return false;
     state->search_text[state->search_len++] = ch;
     state->search_text[state->search_len] = '\0';
-    state->launcher_scroll = 0u;
+    wm_scroll_reset(&state->launcher_scroll);
     /* A new query means new results: whatever was selected is about to be a
      * different program, or gone. */
     state->launcher_selected_index = -1;
@@ -93,7 +85,7 @@ bool wm_start_menu_input_backspace(wm_state_t *state)
 {
     if (!state || !state->launcher_open || state->search_len == 0u) return false;
     state->search_text[--state->search_len] = '\0';
-    state->launcher_scroll = 0u;
+    wm_scroll_reset(&state->launcher_scroll);
     state->launcher_selected_index = -1;
     return true;
 }
@@ -115,47 +107,42 @@ wm_rect_t wm_start_menu_rect(const wm_state_t *state)
     uint32_t height = wm_min_u32(680u, max_h);
     int32_t y = dock.y - (int32_t)height - 6;
     if (y < 0) y = 0;
+    wm_rect_t rest = {4, y, width, height};
+    y += wm_panel_slide_offset(&state->launcher_anim, rest, dock.y);
 #endif
     return (wm_rect_t){4, y, width, height};
 }
 
 #define SM_HEADER_PAD_TOP   12u
-#define SM_ICON_SIZE        32u
-#define SM_HEADER_PAD_LEFT  16u
-#define SM_HEADER_GAP       10u
 #define SM_SEARCH_H         44u
 #define SM_LABEL_PAD        14u
-#define SM_CARD_PAD_X       8u
+#define SM_CARD_PAD_X       4u   /* 36px icon + 4px each side = 44px rows */
 #define SM_CARD_PAD_Y       9u
-#define SM_CARD_GAP         4u
+#define SM_CARD_GAP         2u
 #define SM_FOOTER_H         56u
 #define SM_FOOTER_PAD       12u
 #define SM_SESSION_BTN      40u
 
-/* The avatar sits to the LEFT of the name and the "ImplusOS" line, so the
- * block is as tall as whichever of the two columns is taller. Adding them
- * up, which is what this did, reserved some sixty pixels of empty space
- * between the header and the search box -- and took the room out of the
- * application list below it. */
+/* There is no header any more -- the signed-in user is shown in the
+ * footer -- so this is only the space above the search bar (which is drawn
+ * SM_SEARCH_GAP below it): 12px from the menu's top edge. */
 static uint32_t sm_header_height(void)
 {
-    uint32_t title_line = (uint32_t)(THEME_FONT_LARGE + 0.5f) + 4u;
-    uint32_t sub_line = (uint32_t)(THEME_FONT_SMALL + 0.5f) + 2u;
-    uint32_t text_column = title_line + sub_line;
-    uint32_t tallest = text_column > SM_ICON_SIZE ? text_column : SM_ICON_SIZE;
-    return SM_HEADER_PAD_TOP + tallest + SM_HEADER_PAD_TOP;
+    return SM_HEADER_PAD_TOP - 5u;   /* minus SM_SEARCH_GAP */
 }
 
 static uint32_t sm_label_height(void)
 {
-    return (uint32_t)(THEME_FONT_SMALL + 0.5f) + 10u;
+    /* 10px above the overline text (it would otherwise sit against the
+     * search bar), 8px below it. */
+    return (uint32_t)(THEME_FONT_SMALL + 0.5f) + 18u;
 }
 
 static uint32_t sm_card_height(void)
 {
+    /* One line per app: just its name, no description under it. */
     uint32_t name_h = (uint32_t)(THEME_FONT_BODY + 0.5f) + 4u;
-    uint32_t sub_h = (uint32_t)(THEME_FONT_SMALL + 0.5f) + 2u;
-    uint32_t content = SM_CARD_PAD_Y + name_h + 2u + sub_h + SM_CARD_PAD_Y;
+    uint32_t content = SM_CARD_PAD_Y + name_h + SM_CARD_PAD_Y;
     uint32_t icon_area = SM_CARD_PAD_X + 36u + SM_CARD_PAD_X;
     return content > icon_area ? content : icon_area;
 }
@@ -187,74 +174,33 @@ static wm_rect_t app_viewport_rect(const wm_state_t *state)
     return (wm_rect_t){menu.x + 12, (int32_t)(menu.y + (int32_t)top), width, height};
 }
 
-/* The viewport holds two kinds of row -- a category heading and an app card
- * -- of different heights, so neither the number that fits nor the scroll
- * limit can be a division any more. Both are found by walking the rows and
- * accumulating height, forwards from the first visible row and backwards
- * from the last. */
-static uint32_t sm_section_height(void)
+/* Every row is one app card, so the list is a fixed pitch and the scroll
+ * position is a plain pixel offset into it. */
+static uint32_t row_pitch(void)
 {
-    return (uint32_t)(THEME_FONT_SMALL + 0.5f) + 16u;
+    return sm_card_height() + SM_CARD_GAP;
 }
 
-static uint32_t row_height(const wm_state_t *state, uint32_t row)
+static uint32_t content_height(const wm_state_t *state)
 {
-    if (row >= state->filter_count) return 0u;
-    return state->menu_rows[row].kind == WM_MENU_ROW_HEADER
-        ? sm_section_height() : sm_card_height();
+    return state->filter_count == 0u ? 0u :
+        state->filter_count * row_pitch() - SM_CARD_GAP;
 }
 
-static uint32_t rows_from(const wm_state_t *state, uint32_t first)
-{
-    wm_rect_t vp = app_viewport_rect(state);
-    uint32_t used = 0u;
-    uint32_t count = 0u;
-    for (uint32_t row = first; row < state->filter_count; ++row) {
-        uint32_t height = row_height(state, row);
-        if (used + height > vp.h) break;
-        used += height + SM_CARD_GAP;
-        ++count;
-    }
-    /* Always offer one row: a viewport too short for even a single card
-     * would otherwise render nothing and refuse to scroll. */
-    if (count == 0u && first < state->filter_count) return 1u;
-    return count;
-}
-
-static uint32_t visible_app_rows(const wm_state_t *state)
-{
-    return rows_from(state, state->launcher_scroll);
-}
-
-/* Rows for the current search: every matching app, and -- when nothing is
- * being searched for -- a heading before each run of one category. Results
- * are left flat while searching, where a heading would only push matches out
- * of view. wm_assets_init_metadata() sorted the apps by category, so one
- * pass emits every section in order. */
+/* Rows for the current search: every matching app, in the order
+ * wm_assets_init_metadata() sorted them (by name -- symbols, letters,
+ * digits). There are no category headings any more. */
 static void rebuild_filter_cache(wm_state_t *state)
 {
     const uint32_t capacity =
         (uint32_t)(sizeof(state->menu_rows) / sizeof(state->menu_rows[0]));
-    const bool searching = state->search_len > 0u;
-    uint32_t current_category = (uint32_t)WM_APP_CATEGORY_COUNT;
 
     state->filter_count = 0u;
     for (uint32_t i = 0; i < state->assets.app_count; i++) {
         const wm_launcher_app_t *app = &state->assets.apps[i];
         if (!app_matches(app, state->search_text)) continue;
-        bool needs_header = !searching && (uint32_t)app->category != current_category;
-        /* menu_rows is sized for every app plus one header per category, so
-         * this only ever stops early if both are at their maximum at once. */
-        if (state->filter_count + (needs_header ? 2u : 1u) > capacity) break;
-        if (needs_header) {
-            current_category = (uint32_t)app->category;
-            state->menu_rows[state->filter_count].kind = WM_MENU_ROW_HEADER;
-            state->menu_rows[state->filter_count].value = (uint16_t)current_category;
-            ++state->filter_count;
-        }
-        state->menu_rows[state->filter_count].kind = WM_MENU_ROW_APP;
-        state->menu_rows[state->filter_count].value = (uint16_t)i;
-        ++state->filter_count;
+        if (state->filter_count >= capacity) break;
+        state->menu_rows[state->filter_count++] = (uint16_t)i;
     }
 }
 
@@ -276,57 +222,63 @@ static void ensure_filter_cache(wm_state_t *state)
     }
 }
 
-static uint32_t max_scroll_row(const wm_state_t *state)
+static float max_scroll(const wm_state_t *state)
 {
     wm_rect_t vp = app_viewport_rect(state);
-    uint32_t used = 0u;
-    uint32_t row = state->filter_count;
-    while (row > 0u) {
-        uint32_t height = row_height(state, row - 1u);
-        if (used + height > vp.h) break;
-        used += height + SM_CARD_GAP;
-        --row;
-    }
-    return row;
-}
-
-/* Top of `row` relative to the viewport, given the first visible row. */
-static int32_t row_offset(const wm_state_t *state, uint32_t first, uint32_t row)
-{
-    uint32_t used = 0u;
-    for (uint32_t i = first; i < row; ++i) used += row_height(state, i) + SM_CARD_GAP;
-    return (int32_t)used;
+    uint32_t content = content_height(state);
+    return content > vp.h ? (float)(content - vp.h) : 0.0f;
 }
 
 void wm_start_menu_clamp_scroll(wm_state_t *state)
 {
     if (!state) return;
-    uint32_t max_scroll = max_scroll_row(state);
-    if (state->launcher_scroll > max_scroll) state->launcher_scroll = max_scroll;
+    ensure_filter_cache(state);
+    wm_scroll_clamp(&state->launcher_scroll, max_scroll(state));
 }
 
-bool wm_start_menu_scroll(wm_state_t *state, int32_t rows)
+bool wm_start_menu_scroll(wm_state_t *state, int32_t delta_px)
 {
-    if (!state || !state->launcher_open || rows == 0) return false;
-    uint32_t old = state->launcher_scroll;
-    uint32_t max_scroll = max_scroll_row(state);
-    int32_t next = (int32_t)state->launcher_scroll + rows;
-    if (next < 0) next = 0;
-    if ((uint32_t)next > max_scroll) next = (int32_t)max_scroll;
-    state->launcher_scroll = (uint32_t)next;
-    return old != state->launcher_scroll;
+    if (!state || !state->launcher_open || delta_px == 0) return false;
+    ensure_filter_cache(state);
+    return wm_scroll_to(&state->launcher_scroll,
+                        state->launcher_scroll.target + (float)delta_px,
+                        max_scroll(state));
 }
 
-static wm_rect_t filtered_card_rect(const wm_state_t *state, uint32_t first,
-                                    uint32_t row)
+bool wm_start_menu_scroll_page(wm_state_t *state, int32_t pages)
+{
+    if (!state) return false;
+    /* A page keeps one card of overlap, so the eye has something to
+     * follow across the jump. */
+    wm_rect_t vp = app_viewport_rect(state);
+    int32_t page = (int32_t)vp.h - (int32_t)row_pitch();
+    if (page < (int32_t)row_pitch()) page = (int32_t)row_pitch();
+    return wm_start_menu_scroll(state, pages * page);
+}
+
+/* Card for `row` at the current scroll position. */
+static wm_rect_t card_rect(const wm_state_t *state, uint32_t row)
 {
     wm_rect_t vp = app_viewport_rect(state);
     return (wm_rect_t){
         vp.x,
-        vp.y + row_offset(state, first, row),
+        vp.y + (int32_t)(row * row_pitch()) -
+            wm_scroll_offset(&state->launcher_scroll),
         vp.w,
-        row_height(state, row)
+        sm_card_height()
     };
+}
+
+/* Rows [*first, *last) that are at least partly inside the viewport. */
+static void visible_rows(const wm_state_t *state, uint32_t *first, uint32_t *last)
+{
+    wm_rect_t vp = app_viewport_rect(state);
+    uint32_t offset = (uint32_t)wm_scroll_offset(&state->launcher_scroll);
+    uint32_t pitch = row_pitch();
+    *first = offset / pitch;
+    *last = (offset + vp.h + pitch - 1u) / pitch + 1u;
+    if (*last > state->filter_count) *last = state->filter_count;
+    if (*first > *last) *first = *last;
 }
 
 /* The two session buttons in the footer. Shared by the drawing code and
@@ -353,9 +305,21 @@ static wm_rect_t sm_session_button_rect(wm_rect_t menu, bool shutdown)
  * drawer items -- a full-shape container that the pointer tints with a
  * state layer and the keyboard fills with secondary-container.
  */
+static void draw_menu(wm_state_t *state, wm_canvas_t *canvas);
+
 void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
 {
-    if (!state || !canvas || !state->launcher_open) return;
+    if (!state || !canvas ||
+        !wm_panel_visible(&state->launcher_anim, state->launcher_open)) return;
+    wm_rect_t clip = wm_panel_begin_clip(state, canvas, &state->launcher_anim);
+    draw_menu(state, canvas);
+    wm_canvas_set_clip(canvas, clip);
+}
+
+static void draw_menu(wm_state_t *state, wm_canvas_t *canvas)
+{
+    if (!state || !canvas ||
+        !wm_panel_visible(&state->launcher_anim, state->launcher_open)) return;
     wm_rect_t menu = wm_start_menu_rect(state);
     if (menu.w == 0u || menu.h == 0u) return;
     if (!wm_rect_intersects(menu, canvas->clip)) return;
@@ -373,37 +337,7 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
         (wm_rect_t){menu.x + 1, menu.y + 1, menu.w - 2u, menu.h - 2u},
         radius > 0u ? radius - 1u : 0u, container);
 
-    /* --- header: the signed-in user --- */
-    {
-        wm_rect_t avatar = {menu.x + (int32_t)SM_HEADER_PAD_LEFT,
-                            menu.y + (int32_t)SM_HEADER_PAD_TOP,
-                            SM_ICON_SIZE, SM_ICON_SIZE};
-        wm_canvas_fill_rounded(canvas, avatar,
-            wm_pill_radius(avatar.w, avatar.h),
-            th->accent_soft);
-        wm_icon_draw(canvas,
-            (wm_rect_t){avatar.x + 6, avatar.y + 6, avatar.w - 12u, avatar.h - 12u},
-            WM_ICON_PERSON, th->text);
-        int32_t text_x = menu.x + (int32_t)SM_HEADER_PAD_LEFT +
-                         (int32_t)SM_ICON_SIZE + (int32_t)SM_HEADER_GAP;
-        uint32_t text_max = menu.w > (SM_HEADER_PAD_LEFT + SM_ICON_SIZE +
-                                      SM_HEADER_GAP + 16u) ?
-            menu.w - SM_HEADER_PAD_LEFT - SM_ICON_SIZE - SM_HEADER_GAP - 16u : 0u;
-        wm_font_draw(&state->font, canvas, text_x,
-                     menu.y + (int32_t)SM_HEADER_PAD_TOP,
-                     sm_session_user(), th->text, THEME_FONT_LARGE,
-                     text_max);
-        wm_font_draw(&state->font, canvas, text_x,
-                     menu.y + (int32_t)SM_HEADER_PAD_TOP +
-                         (int32_t)(THEME_FONT_LARGE + 0.5f) + 2,
-                     "ImplusOS", th->text_dim, THEME_FONT_SMALL,
-                     text_max);
-    }
-
     uint32_t sep_y = sm_header_height();
-    wm_canvas_fill(canvas,
-        (wm_rect_t){menu.x + 12, menu.y + (int32_t)sep_y, menu.w - 24u, 1u},
-        th->border);
 
     /* --- M3 search bar: a full-shape container on surface-container-high,
      * outlined in primary while it has the keyboard --- */
@@ -423,7 +357,7 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
         uint32_t tc = state->search_len > 0u ?
             th->text : th->text_dim;
         int32_t text_x = sb.x + 46;
-        int32_t text_y = sb.y + ((int32_t)sb.h - (int32_t)THEME_FONT_LARGE) / 2 - 1;
+        int32_t text_y = sb.y + ((int32_t)sb.h - (int32_t)THEME_FONT_LARGE) / 2;
         wm_font_draw(&state->font, canvas, text_x, text_y,
                      display, tc, THEME_FONT_LARGE,
                      sb.w > 60u ? sb.w - 60u : 0u);
@@ -440,17 +374,14 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
     /* --- list overline --- */
     {
         int32_t label_y = menu.y + (int32_t)sep_y + (int32_t)SM_SEARCH_GAP +
-                          (int32_t)SM_SEARCH_H + 4;
+                          (int32_t)SM_SEARCH_H + 10;
         char label[64];
         (void)snprintf(label, sizeof(label), "%s (%u)",
                        state->search_len > 0u ? "検索結果" : "すべてのアプリ",
                        (unsigned)state->assets.app_count);
-        if (state->search_len > 0u) {
-            uint32_t matches = 0u;
-            for (uint32_t i = 0; i < state->filter_count; ++i)
-                if (state->menu_rows[i].kind == WM_MENU_ROW_APP) ++matches;
-            (void)snprintf(label, sizeof(label), "検索結果 (%u)", (unsigned)matches);
-        }
+        if (state->search_len > 0u)
+            (void)snprintf(label, sizeof(label), "検索結果 (%u)",
+                           (unsigned)state->filter_count);
         wm_font_draw(&state->font, canvas, menu.x + (int32_t)SM_LABEL_PAD, label_y,
                      label, th->text_dim, THEME_FONT_SMALL,
                      menu.w > 28u ? menu.w - 28u : 0u);
@@ -463,37 +394,12 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
         wm_canvas_set_clip(canvas, wm_rect_intersection(old_clip, vp));
 
         uint32_t total = state->filter_count;
-        uint32_t first_row = state->launcher_scroll;
-        uint32_t vis_rows = visible_app_rows(state);
-        uint32_t last_row = first_row + vis_rows;
-        if (last_row > total) last_row = total;
+        uint32_t first_row, last_row;
+        visible_rows(state, &first_row, &last_row);
 
         for (uint32_t row = first_row; row < last_row; ++row) {
-            wm_rect_t card = filtered_card_rect(state, first_row, row);
-
-            if (state->menu_rows[row].kind == WM_MENU_ROW_HEADER) {
-                wm_app_category_t category =
-                    (wm_app_category_t)state->menu_rows[row].value;
-                int32_t text_y = card.y +
-                    (int32_t)(card.h - (uint32_t)(THEME_FONT_SMALL + 0.5f)) / 2;
-                const char *heading = wm_app_category_label(category);
-                wm_font_draw(&state->font, canvas, card.x + 12, text_y,
-                             heading, th->text_dim, THEME_FONT_SMALL,
-                             card.w > 24u ? card.w - 24u : 0u);
-                uint32_t heading_w = wm_font_measure(&state->font, heading,
-                                                     THEME_FONT_SMALL);
-                int32_t rule_x = card.x + 12 + (int32_t)heading_w + 10;
-                int32_t rule_end = card.x + (int32_t)card.w - 12;
-                if (rule_end > rule_x) {
-                    wm_canvas_fill(canvas,
-                        (wm_rect_t){rule_x, text_y + (int32_t)(THEME_FONT_SMALL * 0.5f),
-                                    (uint32_t)(rule_end - rule_x), 1u},
-                        th->border);
-                }
-                continue;
-            }
-
-            uint32_t app_index = state->menu_rows[row].value;
+            wm_rect_t card = card_rect(state, row);
+            uint32_t app_index = state->menu_rows[row];
             wm_launcher_app_t *app = &state->assets.apps[app_index];
 
             /* The pointer wins while it is over a card; otherwise the
@@ -572,15 +478,11 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
                 text_limit = text_limit > consumed ? text_limit - consumed : 0u;
             }
 
-            int32_t name_y = card.y + (int32_t)SM_CARD_PAD_Y;
-            int32_t sub_y = name_y + (int32_t)(THEME_FONT_BODY + 0.5f) + 2;
+            int32_t name_y = card.y +
+                ((int32_t)card.h - (int32_t)THEME_FONT_BODY) / 2;
             wm_font_draw(&state->font, canvas,
                          card.x + 58, name_y,
                          app->name, on_row, THEME_FONT_BODY, text_limit);
-            wm_font_draw(&state->font, canvas,
-                         card.x + 58, sub_y,
-                         app_subtitle(app), on_row_dim, THEME_FONT_SMALL,
-                         card.w > 72u ? card.w - 72u : 0u);
         }
 
         if (total == 0u) {
@@ -590,21 +492,21 @@ void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas)
                          THEME_FONT_BODY, vp.w > 32u ? vp.w - 32u : 0u);
         }
 
-        uint32_t max_scroll = max_scroll_row(state);
-        if (max_scroll > 0u && vp.h >= 24u) {
+        float limit = max_scroll(state);
+        uint32_t content = content_height(state);
+        if (limit > 0.0f && vp.h >= 24u && content > 0u) {
             wm_rect_t track = {vp.x + (int32_t)vp.w - 5, vp.y, 4u, vp.h};
             wm_canvas_fill_rounded(canvas, track, 2u, th->border);
-            uint32_t total_rows = total;
-            uint32_t thumb_h = total_rows ?
-                (uint32_t)(((uint64_t)visible_app_rows(state) * vp.h) / total_rows) : vp.h;
+            uint32_t thumb_h = (uint32_t)(((uint64_t)vp.h * vp.h) / content);
             if (thumb_h < 24u) thumb_h = 24u;
             if (thumb_h > vp.h) thumb_h = vp.h;
             uint32_t travel = vp.h - thumb_h;
-            uint32_t thumb_y = max_scroll ?
-                (uint32_t)(((uint64_t)state->launcher_scroll * travel) / max_scroll) : 0u;
+            float at = (float)wm_scroll_offset(&state->launcher_scroll) / limit;
+            if (at > 1.0f) at = 1.0f;
+            uint32_t thumb_y = (uint32_t)(at * (float)travel + 0.5f);
             wm_canvas_fill_rounded(canvas,
                 (wm_rect_t){track.x, track.y + (int32_t)thumb_y, 4u, thumb_h},
-                2u, th->border);
+                2u, th->text_dim);
         }
         canvas->clip = old_clip;
     }
@@ -668,17 +570,12 @@ wm_launcher_action_t wm_start_menu_hit_test(wm_state_t *state, int32_t x, int32_
     wm_rect_t vp = app_viewport_rect(state);
     if (wm_rect_intersects((wm_rect_t){x, y, 1u, 1u}, vp)) {
         ensure_filter_cache(state);
-        uint32_t total = state->filter_count;
-        uint32_t first_row = state->launcher_scroll;
-        uint32_t vis_rows = visible_app_rows(state);
-        uint32_t last_row = first_row + vis_rows;
-        if (last_row > total) last_row = total;
+        uint32_t first_row, last_row;
+        visible_rows(state, &first_row, &last_row);
         for (uint32_t row = first_row; row < last_row; ++row) {
-            if (state->menu_rows[row].kind != WM_MENU_ROW_APP) continue;
-            wm_rect_t card = filtered_card_rect(state, first_row, row);
-            if (wm_rect_intersects((wm_rect_t){x, y, 1u, 1u}, card)) {
+            if (wm_rect_intersects((wm_rect_t){x, y, 1u, 1u}, card_rect(state, row))) {
                 result.kind = WM_LAUNCHER_ACTION_APP;
-                result.app_index = state->menu_rows[row].value;
+                result.app_index = state->menu_rows[row];
                 return result;
             }
         }
@@ -693,25 +590,23 @@ static int32_t row_of_app(const wm_state_t *state, int32_t app_index)
 {
     if (app_index < 0) return -1;
     for (uint32_t row = 0; row < state->filter_count; ++row) {
-        if (state->menu_rows[row].kind == WM_MENU_ROW_APP &&
-            (int32_t)state->menu_rows[row].value == app_index) {
-            return (int32_t)row;
-        }
+        if ((int32_t)state->menu_rows[row] == app_index) return (int32_t)row;
     }
     return -1;
 }
 
-/* Scroll the least amount that brings `row` fully into the viewport. */
+/* Glide the least distance that brings `row` fully into the viewport,
+ * measured from where the list is heading rather than where it is now, so
+ * holding an arrow key keeps a steady pace. */
 static void scroll_row_into_view(wm_state_t *state, uint32_t row)
 {
-    if (row < state->launcher_scroll) {
-        state->launcher_scroll = row;
-        return;
-    }
-    while (row >= state->launcher_scroll + rows_from(state, state->launcher_scroll) &&
-           state->launcher_scroll < state->filter_count - 1u) {
-        ++state->launcher_scroll;
-    }
+    wm_rect_t vp = app_viewport_rect(state);
+    float top = (float)(row * row_pitch());
+    float bottom = top + (float)sm_card_height();
+    float target = state->launcher_scroll.target;
+    if (top < target) target = top;
+    else if (bottom > target + (float)vp.h) target = bottom - (float)vp.h;
+    (void)wm_scroll_to(&state->launcher_scroll, target, max_scroll(state));
 }
 
 bool wm_start_menu_move_selection(wm_state_t *state, int32_t delta)
@@ -721,35 +616,14 @@ bool wm_start_menu_move_selection(wm_state_t *state, int32_t delta)
     if (state->filter_count == 0u) return false;
 
     int32_t row = row_of_app(state, state->launcher_selected_index);
-    int32_t step = delta > 0 ? 1 : -1;
-    /* Nothing selected yet: Down takes the first app, Up the last. Headers
-     * are skipped -- they are labels, not destinations. */
-    if (row < 0) {
-        row = step > 0 ? -1 : (int32_t)state->filter_count;
-    }
-    for (int32_t moved = 0; moved < (delta > 0 ? delta : -delta); ++moved) {
-        int32_t next = row + step;
-        while (next >= 0 && next < (int32_t)state->filter_count &&
-               state->menu_rows[next].kind != WM_MENU_ROW_APP) {
-            next += step;
-        }
-        if (next < 0 || next >= (int32_t)state->filter_count) break;
-        row = next;
-    }
-    if (row < 0 || row >= (int32_t)state->filter_count ||
-        state->menu_rows[row].kind != WM_MENU_ROW_APP) {
-        return false;
-    }
+    /* Nothing selected yet: Down takes the first app, Up the last. */
+    if (row < 0) row = delta > 0 ? -1 : (int32_t)state->filter_count;
+    row += delta;
+    if (row < 0) row = 0;
+    if (row >= (int32_t)state->filter_count) row = (int32_t)state->filter_count - 1;
 
-    int32_t selected = (int32_t)state->menu_rows[row].value;
-    /* Bring the heading above the first app of a section into view with it,
-     * so moving into a new section shows which section it is. */
-    uint32_t top = (uint32_t)row;
-    if (top > 0u && state->menu_rows[top - 1u].kind == WM_MENU_ROW_HEADER) --top;
     scroll_row_into_view(state, (uint32_t)row);
-    if (top < state->launcher_scroll) state->launcher_scroll = top;
-
-    state->launcher_selected_index = selected;
+    state->launcher_selected_index = (int32_t)state->menu_rows[row];
     /* Take the highlight off the pointer, which may be resting over some
      * other card and would otherwise keep it. */
     state->launcher_hover_index = -1;
@@ -771,11 +645,7 @@ int32_t wm_start_menu_launch_selected(wm_state_t *state)
     if (chosen >= 0 && (uint32_t)chosen < state->assets.app_count) {
         return wm_assets_launch(&state->assets.apps[chosen]);
     }
-    for (uint32_t row = 0; row < state->filter_count; ++row) {
-        if (state->menu_rows[row].kind != WM_MENU_ROW_APP) continue;
-        uint32_t index = state->menu_rows[row].value;
-        if (index >= state->assets.app_count) return -1;
-        return wm_assets_launch(&state->assets.apps[index]);
-    }
+    if (state->filter_count > 0u && state->menu_rows[0] < state->assets.app_count)
+        return wm_assets_launch(&state->assets.apps[state->menu_rows[0]]);
     return -1;
 }

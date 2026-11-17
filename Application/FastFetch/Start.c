@@ -1,8 +1,6 @@
 #include <stdint.h>
-#include <stdio.h>
 
 #include "Process.h"
-#include "Serial.h"
 
 #define FASTFETCH_PATH "/usr/bin/fastfetch"
 #define FASTFETCH_ARGS "--pipe false"
@@ -27,18 +25,11 @@ static int32_t wait_for_exit(int32_t pid)
 
 void _start(void)
 {
-    serial_write_string("[fastfetch] exec " FASTFETCH_PATH "\n");
-
     int32_t pid = process_spawn_with_arg(FASTFETCH_PATH, FASTFETCH_ARGS);
     if (pid < 0) {
-        serial_write_string("[fastfetch] spawn failed\n");
         process_exit(1);
     }
 
     int32_t status = wait_for_exit(pid);
-
-    char msg[64];
-    snprintf(msg, sizeof msg, "[fastfetch] exit status=%d\n", (int)status);
-    serial_write_string(msg);
     process_exit(status);
 }

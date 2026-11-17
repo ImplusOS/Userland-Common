@@ -4,11 +4,11 @@
 #include "../Core/WM_Display.h"
 #include "../Core/WM_Assets.h"
 #include "../SceneGraph/WM_Node.h"
+#include "../Animation/WM_Animation.h"
 #include "../UI/WM_StartMenu.h"
 #include "../UI/WM_Taskbar.h"
 #include "../UI/WM_Desktop.h"
 #include "../UI/WM_Notification.h"
-#include "../UI/WM_Dialog.h"
 #include "../UI/WM_WifiPanel.h"
 #include "../../../../Userland/Source/Syscalls.h"
 #include "../../../../Userland/API/Source/Process.h"
@@ -164,7 +164,7 @@ void wm_input_handle_keyboard(wm_state_t *state, const ipc_message_t *message)
         if (state->launcher_open && state->search_len > 0u) {
             state->search_len = 0u;
             state->search_text[0] = '\0';
-            state->launcher_scroll = 0u;
+            wm_scroll_reset(&state->launcher_scroll);
         } else if (state->wifi_panel.open && state->wifi_panel.selected_index >= 0) {
             state->wifi_panel.selected_index = -1;
             state->wifi_panel.password_active = false;
@@ -218,10 +218,9 @@ void wm_input_handle_keyboard(wm_state_t *state, const ipc_message_t *message)
             return;
         }
         if (event->keycode == KEY_PAGEUP || event->keycode == KEY_PAGEDOWN) {
-            if (wm_start_menu_scroll(state,
-                    event->keycode == KEY_PAGEDOWN ? 4 : -4)) {
-                damage_start_menu(state);
-            }
+            /* The glide repaints the menu as it goes. */
+            (void)wm_start_menu_scroll_page(state,
+                event->keycode == KEY_PAGEDOWN ? 1 : -1);
             return;
         }
         if (event->keycode == KEY_ENTER) {
@@ -363,13 +362,6 @@ static void update_hover(wm_state_t *state)
             state->launcher_hover_index = (int32_t)action.app_index;
     }
     if (old_hover != state->launcher_hover_index) damage_start_menu(state);
-
-    wm_dialog_set_hover_ok(state,
-        state->dialog.active && wm_dialog_ok_contains(state,
-            (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y));
-    wm_dialog_set_hover_close(state,
-        state->dialog.active && wm_dialog_close_contains(state,
-            (int32_t)state->scene.cursor_x, (int32_t)state->scene.cursor_y));
 }
 
 static void update_taskbar_hover(wm_state_t *state)
@@ -556,7 +548,7 @@ static void perform_wifi_action(wm_state_t *state, wm_wifi_action_t action)
                 p->scan_active = true;
                 p->scan_started_ms = get_uptime_ms();
                 p->result_count = 0u;
-                p->scroll = 0u;
+                wm_scroll_reset(&p->scroll);
             }
             damage_wifi_panel(state);
             break;
@@ -750,18 +742,6 @@ static void handle_mouse_event(wm_state_t *state,
         route_mouse(state, event);
         return;
     }
-    if (wm_dialog_dragging(state) && left_held) {
-        extern uint64_t get_uptime_ms(void);
-        uint64_t now_ms = get_uptime_ms();
-        if (now_ms - state->input.last_pointer_frame_ms >= WM_POINTER_FRAME_THROTTLE_MS) {
-            state->input.last_pointer_frame_ms = now_ms;
-            int32_t dx = (int32_t)state->scene.cursor_x - state->dialog.drag_start_x;
-            int32_t dy = (int32_t)state->scene.cursor_y - state->dialog.drag_start_y;
-            wm_dialog_move(state, state->dialog.drag_origin_x + dx,
-                           state->dialog.drag_origin_y + dy);
-        }
-        return;
-    }
     if (state->input.resizing && left_held) {
         extern uint64_t get_uptime_ms(void);
         uint64_t now_ms = get_uptime_ms();
@@ -776,20 +756,18 @@ static void handle_mouse_event(wm_state_t *state,
     update_taskbar_hover(state);
     update_hover(state);
 
-    bool wheel_up   = (buttons & 0x08u) != 0u && (previous & 0x08u) == 0u;
-    bool wheel_down = (buttons & 0x10u) != 0u && (previous & 0x10u) == 0u;
-    if (wheel_up || wheel_down) {
-        int32_t rows = wheel_down ? 1 : -1;
-        if (state->launcher_open && wm_start_menu_scroll(state, rows)) {
-            damage_ui(state); return;
-        }
-        if (state->notification_center_open &&
-            wm_notification_center_scroll(state, rows)) {
-            damage_ui(state); return;
-        }
-        if (state->wifi_panel.open && wm_wifi_panel_scroll(state, rows)) {
-            damage_wifi_panel(state); return;
-        }
+    /* The wheel arrives as a signed notch count (positive = away from the
+     * user, i.e. up), not as button bits. Each panel only sets where its
+     * list should end up; wm_panel_animation_tick() glides it there and
+     * repaints as it moves. */
+    if (event->wheel != 0) {
+        int32_t delta_px = -(int32_t)event->wheel * WM_SCROLL_WHEEL_PX;
+        if (state->launcher_open)
+            (void)wm_start_menu_scroll(state, delta_px);
+        else if (state->notification_center_open)
+            (void)wm_notification_center_scroll(state, delta_px);
+        else if (state->wifi_panel.open)
+            (void)wm_wifi_panel_scroll(state, delta_px);
     }
     if (left_up) {
         wm_window_t *window = wm_scene_find(&state->scene, state->input.active_window_id);
@@ -798,32 +776,12 @@ static void handle_mouse_event(wm_state_t *state,
         state->input.resizing        = false;
         state->input.active_window_id = 0u;
         state->scene.cursor_style    = WM_CURSOR_DEFAULT;
-        wm_dialog_set_dragging(state, false);
     }
     bool consumed = false;
     if (left_down) {
         extern uint64_t get_uptime_ms(void);
         state->input.last_pointer_frame_ms = get_uptime_ms();
-        if (state->dialog.active) {
-            if (wm_dialog_close_contains(state, (int32_t)state->scene.cursor_x,
-                                         (int32_t)state->scene.cursor_y)) {
-                wm_dialog_close(state);
-            } else if (wm_dialog_ok_contains(state, (int32_t)state->scene.cursor_x,
-                                            (int32_t)state->scene.cursor_y)) {
-                wm_dialog_close(state);
-            } else if (wm_dialog_title_contains(state, (int32_t)state->scene.cursor_x,
-                                               (int32_t)state->scene.cursor_y)) {
-                wm_dialog_set_dragging(state, true);
-                state->dialog.drag_start_x = (int32_t)state->scene.cursor_x;
-                state->dialog.drag_start_y = (int32_t)state->scene.cursor_y;
-                state->dialog.drag_origin_x = state->dialog.x;
-                state->dialog.drag_origin_y = state->dialog.y;
-            } else if (!wm_dialog_contains(state, (int32_t)state->scene.cursor_x,
-                                          (int32_t)state->scene.cursor_y)) {
-                wm_dialog_close(state);
-            }
-            consumed = true;
-        } else if (handle_taskbar_click(state)) {
+        if (handle_taskbar_click(state)) {
             consumed = true;
         } else if (handle_notification_center_click(state)) {
             consumed = true;
@@ -864,6 +822,7 @@ bool wm_input_poll_raw_mouse(wm_state_t *state)
     bool have_abs = false;
     int32_t abs_x = 0;
     int32_t abs_y = 0;
+    int32_t wheel = 0;
     while (input_read_mouse(&raw) > 0) {
         if ((raw.flags & INPUT_MOUSE_FLAG_ABSOLUTE) != 0u) {
             /* A tablet reports where the pointer is, not how far it moved:
@@ -882,10 +841,13 @@ bool wm_input_poll_raw_mouse(wm_state_t *state)
             dy += (int16_t)raw.y;
         }
         accum.buttons = raw.buttons;
-        accum.wheel   = raw.wheel;
+        /* Notches add up: keeping only the last report would drop the
+         * rest of a fast spin. */
+        wheel += raw.wheel;
         ++count;
     }
     if (count == 0u) return false;
+    accum.wheel = (int8_t)(wheel > 127 ? 127 : (wheel < -127 ? -127 : wheel));
 
     if (have_abs) {
         int32_t x = abs_x + dx;

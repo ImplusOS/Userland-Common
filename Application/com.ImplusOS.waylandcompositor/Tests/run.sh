@@ -58,5 +58,5 @@ kill -TERM $COMP 2>/dev/null
 wait $COMP 2>/dev/null
 
 echo "--- client output ---"; cat "$OUT/client.log"
-echo "--- compositor ---";    grep -v '^\[wl\] req' "$OUT/compositor.log"
+echo "--- compositor ---";    cat "$OUT/compositor.log"
 echo "--- frames in $OUT/run ---"; ls "$OUT/run"/frame*.ppm 2>/dev/null | tail -1

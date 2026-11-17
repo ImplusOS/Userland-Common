@@ -3,7 +3,6 @@
 
 #include "File.h"
 #include "Process.h"
-#include "Serial.h"
 #include "XSession.h"
 
 /*
@@ -122,7 +121,6 @@ static const char *build_args(void)
         (void)file_close(fd);
     }
     if (got > 0) {
-        serial_write_string("[firefox] using " FIREFOX_LAUNCH_ARGS_FILE "\n");
         (void)append(at, extra, (uint32_t)got);
     } else {
         (void)append(at, FIREFOX_START_URL, cstrlen(FIREFOX_START_URL));
@@ -138,7 +136,6 @@ void _start(void)
                       "FireFox",
                       FIREFOX_WINDOW_W,
                       FIREFOX_WINDOW_H) < 0) {
-        serial_write_string("[firefox] no X server; giving up\n");
         process_exit(1);
     }
 
@@ -149,9 +146,6 @@ void _start(void)
     int32_t status = xsession_run(&session,
                                   FIREFOX_PATH,
                                   build_args());
-    if (status < 0) {
-        serial_write_string("[firefox] could not start firefox\n");
-    }
 
     xsession_close(&session);
     process_exit(status < 0 ? 1 : status);

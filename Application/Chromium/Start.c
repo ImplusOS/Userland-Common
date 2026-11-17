@@ -3,7 +3,6 @@
 
 #include "File.h"
 #include "Process.h"
-#include "Serial.h"
 #include "SystemInfo.h"
 #include "XSession.h"
 
@@ -144,7 +143,6 @@ static const char *build_args(void)
         (void)file_close(fd);
     }
     if (got > 0) {
-        serial_write_string("[chromium] using " CHROME_LAUNCH_ARGS_FILE "\n");
         (void)append(at, extra, (uint32_t)got);
     } else {
         (void)append(at, CHROME_START_URL, cstrlen(CHROME_START_URL));
@@ -158,7 +156,6 @@ void _start(void)
 
     if (xsession_open(&session, "Chromium", CHROME_WINDOW_W,
                       CHROME_WINDOW_H) < 0) {
-        serial_write_string("[chromium] no X server; giving up\n");
         process_exit(1);
     }
 
@@ -167,9 +164,6 @@ void _start(void)
     (void)process_set_credentials(CHROME_UID, CHROME_GID);
 
     int32_t status = xsession_run(&session, CHROME_PATH, build_args());
-    if (status < 0) {
-        serial_write_string("[chromium] could not start chrome\n");
-    }
 
     xsession_close(&session);
     process_exit(status < 0 ? 1 : status);

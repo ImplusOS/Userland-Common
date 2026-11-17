@@ -2,7 +2,6 @@
 #include <stddef.h>
 
 #include "Process.h"
-#include "Serial.h"
 #include "XSession.h"
 
 /*
@@ -43,14 +42,10 @@ void _start(void)
 
     if (xsession_open(&session, "Doom (X11)", DOOM_WINDOW_W,
                       DOOM_WINDOW_H) < 0) {
-        serial_write_string("[doom] no X server; giving up\n");
         process_exit(1);
     }
 
     int32_t status = xsession_run(&session, DOOM_PATH, NULL);
-    if (status < 0) {
-        serial_write_string("[doom] could not start linuxxdoom\n");
-    }
 
     xsession_close(&session);
     process_exit(status < 0 ? 1 : status);

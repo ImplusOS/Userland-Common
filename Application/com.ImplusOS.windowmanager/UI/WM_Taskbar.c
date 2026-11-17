@@ -1,12 +1,16 @@
 #include "WM_Taskbar.h"
 #include "WM_Icons.h"
 
+#include "../Compositor/WM_Damage.h"
 #include "../Compositor/WM_Raster.h"
 #include "../Font/WM_Font.h"
 #include "../../../../Userland/API/Source/Time.h"
 #include "../../../../Userland/API/Source/Network.h"
 #include "../../../../Userland/API/Source/Process.h"
 
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -23,11 +27,13 @@
 
 /* --- navigation bar geometry (px) --- */
 #define TB_PAD           3                 /* plate inset -> 34px buttons */
-#define TB_START_W       42u
-#define TB_TASK_MAX      220u
+#define TB_BTN_GAP       4                 /* Start->task and task->task gap */
 #define TB_TRAY_ICON_W   34u
 #define TB_NOTIF_W       34u
-#define TB_CLOCK_W       168u
+#define TB_CLOCK_W       96u               /* fallback before the font loads */
+#define TB_CLOCK_PAD     8                 /* clock text <-> slot edge, each side */
+#define TB_CLOCK_MARGIN  6                 /* slot <-> screen edge */
+#define TB_CLOCK_FONT    (THEME_FONT_SMALL - 1.0f)
 #define TB_SEP_GAP       8
 #define TB_ICON_SZ       18u
 
@@ -38,6 +44,42 @@ static uint32_t day_of_week(uint32_t y, uint32_t m, uint32_t d)
     static const uint32_t t[] = {0,3,2,5,0,3,5,1,4,6,2,4};
     if (m < 3) y--;
     return (y + y/4u - y/100u + y/400u + t[m-1u] + d) % 7u;
+}
+
+/* clock_text is "YYYY/MM/DD HH:MM:SS": the date before the space, the time
+ * after it. */
+static void split_clock(const char *text, char *date, size_t date_size,
+                        const char **time_part)
+{
+    date[0] = '\0';
+    *time_part = text;
+    const char *space = strchr(text, ' ');
+    if (!space) return;
+    size_t n = (size_t)(space - text);
+    if (n >= date_size) n = date_size - 1u;
+    memcpy(date, text, n);
+    date[n] = '\0';
+    *time_part = space + 1;
+}
+
+/* The clock slot is as wide as its wider row plus TB_CLOCK_PAD each side,
+ * so the gap to the tray icon beside it follows the text instead of a
+ * fixed width. */
+static uint32_t measure_clock_width(wm_state_t *state)
+{
+    if (!state->font.loaded || !state->clock_text[0]) return TB_CLOCK_W;
+    char date[sizeof(state->clock_text)];
+    const char *time_part;
+    split_clock(state->clock_text, date, sizeof(date), &time_part);
+    uint32_t w = wm_font_measure(&state->font, time_part, TB_CLOCK_FONT);
+    uint32_t dw = wm_font_measure(&state->font, date, TB_CLOCK_FONT);
+    if (dw > w) w = dw;
+    return w + (uint32_t)TB_CLOCK_PAD * 2u;
+}
+
+static uint32_t clock_slot_width(const wm_state_t *state)
+{
+    return state->clock_width ? state->clock_width : TB_CLOCK_W;
 }
 
 bool wm_taskbar_update_clock(wm_state_t *state)
@@ -69,16 +111,47 @@ bool wm_taskbar_update_clock(wm_state_t *state)
 
     if (strcmp(state->clock_text, next_clock) == 0) return false;
     memcpy(state->clock_text, next_clock, sizeof(state->clock_text));
+
+    /* A different width moves the whole tray: repaint all of the bar. */
+    uint32_t width = measure_clock_width(state);
+    if (width != state->clock_width) {
+        state->clock_width = width;
+        wm_rect_t dock = wm_taskbar_rect(state);
+        wm_region_add(&state->compositor.damage, dock,
+            (wm_rect_t){0, 0, state->compositor.framebuffer_width,
+                        state->compositor.framebuffer_height});
+    }
     return true;
 }
 
 /* ---------------------------------------------------------------- NTP */
 
+/* IPv4 address of <host> in host byte order through the POSIX resolver,
+ * 0 when it does not resolve. */
+static uint32_t wm_taskbar_resolve_ipv4(const char *host)
+{
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, NULL, &hints, &res) != 0 || res == NULL) return 0u;
+
+    uint32_t ip = 0u;
+    if (res->ai_addr != NULL && res->ai_addrlen >= sizeof(struct sockaddr_in)) {
+        const struct sockaddr_in *sin = (const struct sockaddr_in *)res->ai_addr;
+        ip = ntohl(sin->sin_addr.s_addr);
+    }
+    freeaddrinfo(res);
+    return ip;
+}
+
 void wm_taskbar_start_ntp(wm_state_t *state)
 {
     if (!state || state->ntp.ntp_local_port != 0u) return;
 
-    uint32_t ip = dns_resolve("time.google.com");
+    uint32_t ip = wm_taskbar_resolve_ipv4("time.google.com");
     if (ip == 0u) return;
 
     uint16_t port = 0u;
@@ -158,32 +231,42 @@ wm_rect_t wm_taskbar_rect(const wm_state_t *state)
 }
 
 /* x of the leftmost tray icon (IME); everything right of this is the tray */
-static int32_t tray_left_x(wm_rect_t dock)
+static int32_t tray_left_x(const wm_state_t *state, wm_rect_t dock)
 {
-    int32_t clock_x = (int32_t)dock.w - (int32_t)TB_CLOCK_W - 6;
+    int32_t clock_x = (int32_t)dock.w - (int32_t)clock_slot_width(state) -
+                      TB_CLOCK_MARGIN;
     return clock_x - 3 * (int32_t)TB_TRAY_ICON_W;
 }
 
-static int32_t notif_x(wm_rect_t dock)
+static int32_t notif_x(const wm_state_t *state, wm_rect_t dock)
 {
-    return tray_left_x(dock) - TB_SEP_GAP - (int32_t)TB_NOTIF_W;
+    return tray_left_x(state, dock) - TB_SEP_GAP - (int32_t)TB_NOTIF_W;
 }
 
 wm_rect_t wm_taskbar_clock_rect(const wm_state_t *state)
 {
     wm_rect_t dock = wm_taskbar_rect(state);
     if (dock.w == 0u) return (wm_rect_t){0, 0, 0, 0};
-    int32_t x = (int32_t)dock.w - (int32_t)TB_CLOCK_W - 6;
+    uint32_t w = clock_slot_width(state);
+    int32_t x = (int32_t)dock.w - (int32_t)w - TB_CLOCK_MARGIN;
     if (x < 0) x = 0;
-    return (wm_rect_t){x, dock.y, TB_CLOCK_W + 6u, dock.h};
+    return (wm_rect_t){x, dock.y, w, dock.h};
 }
 
 /* Only running windows sit on the taskbar -- the Start button, then the
  * open-window buttons. (No pinned apps.list shortcuts.) */
-static int32_t tasks_left_x(const wm_state_t *state)
+/* Start and task buttons are square: as wide as the bar's button row is
+ * tall. */
+static uint32_t square_button_size(wm_rect_t dock)
 {
-    (void)state;
-    return TB_PAD + (int32_t)TB_START_W + 8;
+    return dock.h > (uint32_t)TB_PAD * 2u ? dock.h - (uint32_t)TB_PAD * 2u : 0u;
+}
+
+/* The first task button sits one TB_BTN_GAP right of the Start button --
+ * the same gap that separates the task buttons from each other. */
+static int32_t tasks_left_x(wm_rect_t dock)
+{
+    return TB_PAD + (int32_t)square_button_size(dock) + TB_BTN_GAP;
 }
 
 static bool cursor_in(const wm_state_t *state, wm_rect_t r)
@@ -209,13 +292,14 @@ static void task_layout(const wm_state_t *state, wm_rect_t dock,
                         int32_t *start_x)
 {
     uint32_t count = visible_window_count(state);
-    int32_t left  = tasks_left_x(state);
-    int32_t right = notif_x(dock) - 8;
+    int32_t left  = tasks_left_x(dock);
+    int32_t right = notif_x(state, dock) - 8;
     uint32_t available = right > left ? (uint32_t)(right - left) : 0u;
     uint32_t width = (count == 0u) ? 0u : available / count;
     uint32_t slots = count;
     if (count != 0u && width == 0u) { width = 1u; slots = available; }
-    if (width > TB_TASK_MAX) width = TB_TASK_MAX;
+    uint32_t pitch = square_button_size(dock) + (uint32_t)TB_BTN_GAP;
+    if (width > pitch) width = pitch;           /* square button + gap */
     *button_width = width;
     *slot_count   = slots;
     *start_x      = left;
@@ -223,8 +307,15 @@ static void task_layout(const wm_state_t *state, wm_rect_t dock,
 
 /* ---------------------------------------------------------------- draw */
 
-/* One destination's container: M3's active-indicator pill when it is the
- * current one, a state layer while it is merely hovered, and nothing at all
+/* Corner radius of a taskbar button's container: the same radius as the
+ * window corners, so the bar's hover/active shapes match the windows. */
+static uint32_t destination_radius(const wm_state_t *state, wm_rect_t box)
+{
+    return wm_min_u32(state->theme.corner_radius, wm_pill_radius(box.w, box.h));
+}
+
+/* One destination's container: the active indicator when it is the current
+ * one, a state layer while it is merely hovered, and nothing at all
  * otherwise -- a navigation bar's plate shows through the rest of the time. */
 static void draw_destination(wm_state_t *state, wm_canvas_t *canvas,
                              wm_rect_t box, uint32_t plate, bool active,
@@ -235,8 +326,8 @@ static void draw_destination(wm_state_t *state, wm_canvas_t *canvas,
     uint32_t container = active
         ? th->accent_soft
         : color_mix(plate, th->text, THEME_HOVER_PCT);
-    wm_canvas_fill_rounded(canvas, box,
-        wm_pill_radius(box.w, box.h), container);
+    wm_canvas_fill_rounded(canvas, box, destination_radius(state, box),
+                           container);
 }
 
 static void tray_icon(wm_state_t *state, wm_canvas_t *canvas, int32_t x,
@@ -275,15 +366,15 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
     int32_t pad = TB_PAD;
 
     /* --- Start button: the ImplusOS logo (Resource/Icons/Logo.png) --- */
-    wm_rect_t start = {pad, dock.y + pad, TB_START_W - (uint32_t)pad,
-                       dock.h - (uint32_t)pad * 2u};
+    uint32_t square = square_button_size(dock);
+    wm_rect_t start = {pad, dock.y + pad, square, square};
     bool start_hover = cursor_in(state, start);
     draw_destination(state, canvas, start, plate, state->launcher_open, start_hover);
     {
         uint32_t isz = 24u;
         wm_rect_t ir = {start.x + (int32_t)(start.w - isz) / 2,
                         start.y + (int32_t)(start.h - isz) / 2, isz, isz};
-        const wm_icon_image_t *logo = &state->assets.system_icons.logo;
+        const wm_icon_image_t *logo = &state->assets.logo;
         if (logo->pixels && logo->width && logo->height) {
             wm_canvas_blit_scaled(canvas, ir, logo->pixels,
                                   logo->width, logo->height, 255u,
@@ -304,35 +395,28 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
         wm_window_t *win = state->scene.id_table[id];
         if (!win || !win->visible || win->is_system || win->close_requested) continue;
         if (drawn >= slots) break;
-        uint32_t inset = btn_w >= 10u ? 2u : 0u;
-        wm_rect_t btn = {btn_x + (int32_t)inset, dock.y + pad,
-                         btn_w > inset * 2u ? btn_w - inset * 2u : btn_w,
-                         dock.h - (uint32_t)pad * 2u};
+        /* Each slot is a square button followed by TB_BTN_GAP; only when
+         * the bar is crowded do the buttons narrow. */
+        uint32_t gap = btn_w > (uint32_t)TB_BTN_GAP * 2u ? (uint32_t)TB_BTN_GAP : 0u;
+        wm_rect_t btn = {btn_x, dock.y + pad, btn_w - gap, square};
         bool hover = cursor_in(state, btn);
-        uint32_t pill = wm_pill_radius(btn.w, btn.h);
+        uint32_t radius = destination_radius(state, btn);
         draw_destination(state, canvas, btn, plate, win->has_focus, hover);
         /* A minimised window is still running, so it keeps its place on the
          * bar; M3's way of saying "present but not active" is an outline
          * rather than a filled container. */
         if (win->minimized && !win->has_focus)
-            wm_canvas_stroke_rounded(canvas, btn, pill, 1u, th->border);
+            wm_canvas_stroke_rounded(canvas, btn, radius, 1u, th->border);
 
         uint32_t on_container = win->has_focus ? th->text
                                                : th->text_dim;
-        if (btn.w >= 30u) {
+        /* Icon only -- no title text on the bar. */
+        if (btn.w >= TB_ICON_SZ) {
             uint32_t isz = TB_ICON_SZ;
-            int32_t ix = btn.x + (btn.w >= 120u ? 10 : (int32_t)(btn.w - isz) / 2);
+            int32_t ix = btn.x + (int32_t)(btn.w - isz) / 2;
             int32_t iy = btn.y + (int32_t)(btn.h - isz) / 2;
             wm_icon_draw(canvas, (wm_rect_t){ix, iy, isz, isz},
                          WM_ICON_DOC, on_container);
-        }
-        if (btn.w >= 100u) {
-            const char *title = win->title[0] ? win->title : "Window";
-            float size = THEME_FONT_SMALL;
-            wm_font_draw(&state->font, canvas,
-                         btn.x + 38, btn.y + (int32_t)(btn.h - (uint32_t)size) / 2,
-                         title, on_container, size,
-                         btn.w > 50u ? btn.w - 50u : 0u);
         }
         btn_x += (int32_t)btn_w;
         ++drawn;
@@ -340,7 +424,7 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
 
     /* --- notification bell, with its M3 badge --- */
     {
-        wm_rect_t nbtn = {notif_x(dock), dock.y + pad, TB_NOTIF_W,
+        wm_rect_t nbtn = {notif_x(state, dock), dock.y + pad, TB_NOTIF_W,
                           dock.h - (uint32_t)pad * 2u};
         bool nhover = cursor_in(state, nbtn);
         bool nactive = state->notification_center_open;
@@ -363,13 +447,13 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
 
     /* --- divider between the task list and the tray --- */
     wm_canvas_fill(canvas,
-        (wm_rect_t){tray_left_x(dock) - TB_SEP_GAP / 2, dock.y + pad + 8,
+        (wm_rect_t){tray_left_x(state, dock) - TB_SEP_GAP / 2, dock.y + pad + 8,
                     1u, dock.h - (uint32_t)pad * 2u - 16u},
         th->border);
 
     /* --- tray: IME, Wi-Fi, Audio (left -> right toward the clock) --- */
     {
-        int32_t tx = tray_left_x(dock);
+        int32_t tx = tray_left_x(state, dock);
         bool wifi_connected = state->wifi_panel.status.state == WIFI_STATE_ASSOCIATED;
         tray_icon(state, canvas, tx, dock, plate, WM_ICON_IME, false, false);
         tray_icon(state, canvas, tx + (int32_t)TB_TRAY_ICON_W, dock, plate,
@@ -379,18 +463,32 @@ void wm_taskbar_draw(wm_state_t *state, wm_canvas_t *canvas)
                   WM_ICON_VOLUME, false, false);
     }
 
-    /* --- clock: YYYY/MM/DD HH:MM:SS, far right --- */
+    /* --- clock, far right: HH:MM:SS on top, YYYY/MM/DD below --- */
     if (state->clock_text[0]) {
         wm_rect_t cr = wm_taskbar_clock_rect(state);
         wm_rect_t hit = {cr.x, dock.y + pad, cr.w, dock.h - (uint32_t)pad * 2u};
         draw_destination(state, canvas, hit, plate, false, cursor_in(state, hit));
-        float size = THEME_FONT_SMALL;
-        uint32_t tw = wm_font_measure(&state->font, state->clock_text, size);
-        int32_t tx = cr.x + ((int32_t)cr.w - (int32_t)tw) / 2;
-        if (tx < cr.x + 2) tx = cr.x + 2;
-        int32_t ty = dock.y + ((int32_t)dock.h - (int32_t)size) / 2 - 1;
-        wm_font_draw(&state->font, canvas, tx, ty,
-                     state->clock_text, th->text, size, cr.w);
+
+        char date[sizeof(state->clock_text)];
+        const char *time_part;
+        split_clock(state->clock_text, date, sizeof(date), &time_part);
+
+        /* Both rows right-aligned, same colour. */
+        float size = TB_CLOCK_FONT;
+        int32_t line_h = (int32_t)size + 4;   /* room between the two rows */
+        int32_t lines = date[0] ? 2 : 1;
+        int32_t block = line_h * (lines - 1) + (int32_t)size;
+        /* Centre in the plate below its 1px top divider. */
+        int32_t ty = dock.y + 1 + ((int32_t)dock.h - 1 - block) / 2;
+        int32_t right = cr.x + (int32_t)cr.w - TB_CLOCK_PAD;
+        const char *rows[2] = { time_part, date };
+        for (int32_t i = 0; i < lines; ++i) {
+            uint32_t tw = wm_font_measure(&state->font, rows[i], size);
+            int32_t tx = right - (int32_t)tw;
+            if (tx < cr.x + 2) tx = cr.x + 2;
+            wm_font_draw(&state->font, canvas, tx, ty + i * line_h,
+                         rows[i], th->text, size, cr.w);
+        }
     }
 }
 
@@ -403,18 +501,18 @@ wm_taskbar_hit_t wm_taskbar_hit_test(wm_state_t *state, int32_t x, int32_t y)
     wm_rect_t dock = wm_taskbar_rect(state);
     if (!wm_rect_intersects((wm_rect_t){x, y, 1u, 1u}, dock)) return result;
 
-    if (x >= TB_PAD && x < TB_PAD + (int32_t)TB_START_W) {
+    if (x >= TB_PAD && x < TB_PAD + (int32_t)square_button_size(dock)) {
         result.kind = WM_TASKBAR_HIT_LAUNCHER;
         return result;
     }
 
-    int32_t nx = notif_x(dock);
+    int32_t nx = notif_x(state, dock);
     if (x >= nx && x < nx + (int32_t)TB_NOTIF_W) {
         result.kind = WM_TASKBAR_HIT_NOTIFICATION;
         return result;
     }
 
-    int32_t tx = tray_left_x(dock);
+    int32_t tx = tray_left_x(state, dock);
     if (x >= tx && x < tx + (int32_t)TB_TRAY_ICON_W) { result.kind = WM_TASKBAR_HIT_IME; return result; }
     if (x >= tx + (int32_t)TB_TRAY_ICON_W && x < tx + 2 * (int32_t)TB_TRAY_ICON_W) { result.kind = WM_TASKBAR_HIT_NETWORK; return result; }
     if (x >= tx + 2 * (int32_t)TB_TRAY_ICON_W && x < tx + 3 * (int32_t)TB_TRAY_ICON_W) { result.kind = WM_TASKBAR_HIT_AUDIO; return result; }

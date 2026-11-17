@@ -9,6 +9,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_GLYPH_H
+#include FT_TRUETYPE_TABLES_H
 
 #define WM_GLYPH_CACHE_SIZE 4096u
 #define WM_GLYPH_HASH_SIZE  8192u
@@ -40,6 +41,10 @@ typedef struct {
     uint32_t lru_head;
     uint32_t lru_tail;
     uint32_t next_unused;
+    /* Top of the em box above the baseline, in font units (OS/2
+     * sTypoAscender; 880 of 1000 for Noto Sans JP), and the em size. */
+    int32_t em_ascent;
+    int32_t units_per_em;
 } wm_font_impl_t;
 
 static int utf8_decode(const char **cursor)
@@ -313,6 +318,14 @@ bool wm_font_init(wm_font_t *font, const char *path)
     }
 
     impl->buffer_size = stat.size;
+    impl->units_per_em = impl->face->units_per_EM ? impl->face->units_per_EM : 1000;
+    impl->em_ascent = (impl->units_per_em * 88) / 100;
+    {
+        TT_OS2 *os2 = (TT_OS2 *)FT_Get_Sfnt_Table(impl->face, FT_SFNT_OS2);
+        if (os2 && os2->sTypoAscender > 0 &&
+            os2->sTypoAscender <= impl->units_per_em)
+            impl->em_ascent = os2->sTypoAscender;
+    }
     font->impl = impl;
     font->loaded = true;
     return true;
@@ -346,8 +359,14 @@ void wm_font_draw(wm_font_t *font, wm_canvas_t *canvas,
 {
     if (!font || !font->loaded || !canvas || !text || pixel_height <= 0.0f) return;
     wm_font_impl_t *impl = (wm_font_impl_t *)font->impl;
-    FT_Set_Pixel_Sizes(impl->face, 0, (FT_UInt)(pixel_height + 0.5f));
-    int32_t baseline = y + (int)(impl->face->size->metrics.ascender >> 6);
+    FT_UInt pixels = (FT_UInt)(pixel_height + 0.5f);
+    FT_Set_Pixel_Sizes(impl->face, 0, pixels);
+    /* `y` is the top of the em box -- a pixel_height-tall box that the
+     * glyphs sit centred in -- so callers can centre text in a rect with
+     * y = rect.y + (rect.h - size) / 2. (The hhea ascender used before sits
+     * 0.28em higher, which drew every label ~3-4px low.) */
+    int32_t baseline = y + (int32_t)(((int64_t)impl->em_ascent * (int64_t)pixels +
+                                      impl->units_per_em / 2) / impl->units_per_em);
     int32_t cursor_x = x;
     FT_UInt previous = 0;
     uint32_t red = (color >> 16u) & 0xFFu;

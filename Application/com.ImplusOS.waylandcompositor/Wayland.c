@@ -153,7 +153,6 @@ static void send_all(wlc_client_t *c, const uint8_t *b, uint32_t n)
         if (++spins < 64u) process_yield(); else sleep_ms(1);
     }
     if (off < n) {
-        wlc_log("[wl] client stopped draining, dropping the connection\n");
         c->broken = true;
     }
 }
@@ -322,7 +321,6 @@ bool wlc_client_accept(int32_t fd)
         if (!c->obj) c->obj = (wlc_obj_t *)malloc(sizeof(wlc_obj_t) * WLC_MAX_ID);
         if (!c->rx)  c->rx  = (uint8_t *)malloc(WLC_RX_CAP);
         if (!c->obj || !c->rx) {
-            wlc_log("[wl] out of memory accepting client\n");
             (void)syscall1(SYS_UNIX_CLOSE, (uint64_t)fd);
             return false;
         }
@@ -336,10 +334,8 @@ bool wlc_client_accept(int32_t fd)
         c->broken = false;
         c->obj[1].type = O_DISPLAY;
         c->obj[1].s_window = -1;
-        wlc_log("[wl] client connected\n");
         return true;
     }
-    wlc_log("[wl] too many clients, connection refused\n");
     (void)syscall1(SYS_UNIX_CLOSE, (uint64_t)fd);
     return false;
 }
@@ -363,7 +359,6 @@ void wlc_client_drop(wlc_client_t *c)
     if (g_pointer_focus >= 0 && !g_windows[g_pointer_focus].used) g_pointer_focus = -1;
     if (g_keyboard_focus >= 0 && !g_windows[g_keyboard_focus].used) g_keyboard_focus = -1;
     wlc_damage_all();
-    wlc_log("[wl] client disconnected\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -446,15 +441,15 @@ static void send_keymap(wlc_client_t *c, uint32_t kbd)
 
     if (g_keymap_shm < 0) {
         int32_t h = os_shared_memory_create(size);
-        if (h < 0) { wlc_log("[wl] keymap: shm create failed\n"); return; }
+        if (h < 0) return;
         void *p = os_shared_memory_map(h);
-        if (!p) { wlc_log("[wl] keymap: shm map failed\n"); return; }
+        if (!p) return;
         memcpy(p, k_keymap, size);
         g_keymap_shm = h;
     }
 
     int32_t fd = os_memfd_from_shm(g_keymap_shm);
-    if (fd < 0) { wlc_log("[wl] keymap: memfd wrap failed\n"); return; }
+    if (fd < 0) return;
 
     wlc_msg_t m;
     m_begin(&m, kbd, 0u);            /* keymap(format, fd, size) */
@@ -679,7 +674,6 @@ static bool copy_buffer_to_window(wlc_client_t *c, wlc_window_t *win,
     wlc_pool_t *pool = pool_get(b->b_pool);
     if (!pool || !pool->base) return false;
     if ((uint64_t)b->b_off + (uint64_t)b->b_stride * b->b_h > pool->size) {
-        wlc_log("[wl] buffer outside its pool, dropped\n");
         return false;
     }
 
@@ -687,7 +681,7 @@ static bool copy_buffer_to_window(wlc_client_t *c, wlc_window_t *win,
     if (needed > 64u * 1024u * 1024u) return false;
     if (win->pix_cap < needed) {
         uint32_t *p = (uint32_t *)malloc((size_t)needed * sizeof(uint32_t));
-        if (!p) { wlc_log("[wl] out of memory for a surface\n"); return false; }
+        if (!p) return false;
         free(win->pixels);
         win->pixels = p;
         win->pix_cap = (uint32_t)needed;
@@ -735,7 +729,6 @@ static void req_display(wlc_client_t *c, uint16_t op, const uint8_t *a, uint32_t
             m_u32(&m, G[i].version);
             m_send(&m, c);
         }
-        wlc_log("[wl] registry sent\n");
     }
 }
 
@@ -776,12 +769,8 @@ static void req_registry(wlc_client_t *c, uint16_t op, const uint8_t *a, uint32_
     } else if (!strcmp(iface, "wl_data_device_manager")) {
         obj_set(c, newid, O_DDM);
     } else {
-        wlc_log("[wl] bind of an unadvertised interface ignored\n");
         return;
     }
-    wlc_log("[wl] bound ");
-    wlc_log(iface);
-    wlc_log("\n");
 }
 
 static void req_compositor(wlc_client_t *c, uint16_t op, const uint8_t *a, uint32_t n)
@@ -808,7 +797,7 @@ static void req_shm(wlc_client_t *c, uint16_t op, const uint8_t *a, uint32_t n)
 
     wlc_obj_t *o = obj_set(c, nid, O_SHM_POOL);
     if (!o) return;
-    if (fd < 0) { wlc_log("[wl] create_pool without an fd\n"); return; }
+    if (fd < 0) return;
 
     int32_t h = os_memfd_shm_handle(fd);
     uint8_t *base = (h >= 0) ? (uint8_t *)os_shared_memory_map(h) : NULL;
@@ -818,12 +807,11 @@ static void req_shm(wlc_client_t *c, uint16_t op, const uint8_t *a, uint32_t n)
      * objects) from filling up over a long session. */
     (void)file_close(fd);
 
-    if (h < 0)   { wlc_log("[wl] create_pool: fd is not shm-backed\n"); return; }
-    if (!base)   { wlc_log("[wl] create_pool: shm map failed\n"); return; }
+    if (h < 0) return;
+    if (!base) return;
 
     o->pool_index = pool_alloc(c, h, base, size);
     if (o->pool_index < 0) {
-        wlc_log("[wl] too many wl_shm pools\n");
         (void)os_shared_memory_unmap(h, base);
     }
 }
@@ -860,11 +848,7 @@ static void req_shm_pool(wlc_client_t *c, uint32_t id, uint16_t op,
         uint32_t want = r_u32(a);
         if (pool != NULL && want > pool->size) {
             uint32_t capacity = os_shared_memory_size(pool->handle);
-            if (want <= capacity) {
-                pool->size = want;
-            } else {
-                wlc_logf_u32("[wl] pool resize past its reservation: ", want);
-            }
+            if (want <= capacity) pool->size = want;
         }
     }
 }
@@ -1059,7 +1043,7 @@ static void req_xdg_surface(wlc_client_t *c, uint32_t id, uint16_t op,
         xs->x_role = nid;
 
         int32_t index = wlc_window_alloc(c, xs->x_surface, id);
-        if (index < 0) { wlc_log("[wl] no free window slot\n"); return; }
+        if (index < 0) return;
         g_windows[index].role = nid;
         g_windows[index].popup = false;
         wlc_obj_t *s = obj(c, xs->x_surface);
@@ -1074,7 +1058,6 @@ static void req_xdg_surface(wlc_client_t *c, uint32_t id, uint16_t op,
         m_array_empty(&m);                   /* no states: not maximized */
         m_send(&m, c);
         send_xdg_configure(c, id);
-        wlc_log("[wl] toplevel configured\n");
         break;
     }
 
@@ -1089,7 +1072,7 @@ static void req_xdg_surface(wlc_client_t *c, uint32_t id, uint16_t op,
         xs->x_role = nid;
 
         int32_t index = wlc_window_alloc(c, xs->x_surface, id);
-        if (index < 0) { wlc_log("[wl] no free window slot\n"); return; }
+        if (index < 0) return;
         g_windows[index].role = nid;
         g_windows[index].popup = true;
         wlc_obj_t *parent = obj(c, parent_xdg);
@@ -1314,48 +1297,18 @@ static void req_ddm(wlc_client_t *c, uint32_t id, uint16_t op,
     else if (op == 1u) obj_set(c, nid, O_DATA_DEVICE);
 }
 
-/* Every request, one line each, for bring-up. Off by default: the volume is
- * enormous once a client is drawing, and COM1 is written a byte at a time
- * from inside the syscall path. Build with -DWLC_PROTOCOL_TRACE to turn on.
- *
- * Even switched on it stops after WLC_TRACE_MAX lines. In QEMU the serial
- * port is the only channel out and it costs a syscall per byte, so an
- * uncapped trace changes the timing of the very thing it is measuring --
- * and startup, which is what a trace is wanted for, is over long before
- * the cap. */
-#ifdef WLC_PROTOCOL_TRACE
-#ifndef WLC_TRACE_MAX
-#define WLC_TRACE_MAX 600u
-#endif
-static uint32_t g_trace_left = WLC_TRACE_MAX;
-static void trace_request(uint32_t id, uint16_t op, uint8_t type, uint32_t alen)
-{
-    if (g_trace_left == 0u) return;
-    if (--g_trace_left == 0u) { wlc_log("[wl] trace cap reached\n"); return; }
-    wlc_log_u32("[wl] req id=", id);
-    wlc_log_u32(" op=", op);
-    wlc_log_u32(" type=", type);
-    wlc_logf_u32(" argbytes=", alen);
-}
-#else
-#define trace_request(id, op, type, alen) ((void)0)
-#endif
-
 static void dispatch(wlc_client_t *c, uint32_t id, uint16_t op,
                      const uint8_t *args, uint32_t alen)
 {
     if (id == 1u) {
-        trace_request(id, op, O_DISPLAY, alen);
         req_display(c, op, args, alen);
         return;
     }
 
     wlc_obj_t *o = obj(c, id);
     if (!o || o->type == O_NONE) {
-        trace_request(id, op, O_NONE, alen);
         return;
     }
-    trace_request(id, op, o->type, alen);
 
     switch (o->type) {
     case O_REGISTRY:      req_registry(c, op, args, alen); break;
@@ -1460,7 +1413,6 @@ static void process_rx(wlc_client_t *c)
         uint16_t op = (uint16_t)(w1 & 0xffffu);
         uint32_t size = w1 >> 16;
         if (size < 8u || size > WLC_RX_CAP) {
-            wlc_log("[wl] malformed message, dropping the connection\n");
             wlc_client_drop(c);
             return;
         }

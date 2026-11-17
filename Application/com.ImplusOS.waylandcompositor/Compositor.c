@@ -29,7 +29,6 @@
 #include "Graphics.h"
 #include "Input.h"
 #include "Memory.h"
-#include "Serial.h"
 
 extern uint64_t syscall1(uint64_t, uint64_t);
 extern uint64_t syscall2(uint64_t, uint64_t, uint64_t);
@@ -49,23 +48,6 @@ int32_t      g_zorder[WLC_MAX_WINDOWS];
 uint32_t     g_zcount;
 wlc_output_t g_out;
 bool         g_dirty;
-
-/* ---- logging --------------------------------------------------------- */
-void wlc_log(const char *s) { serial_write_string(s); }
-
-void wlc_logf_u32(const char *prefix, uint32_t value)
-{
-    serial_write_string(prefix);
-    serial_write_uint32(value);
-    serial_write_string("\n");
-}
-
-/* Same, without the newline, for building one line out of several fields. */
-void wlc_log_u32(const char *prefix, uint32_t value)
-{
-    serial_write_string(prefix);
-    serial_write_uint32(value);
-}
 
 uint32_t wlc_now_ms(void) { return (uint32_t)get_uptime_ms(); }
 
@@ -465,12 +447,11 @@ static bool output_open_panel(void)
      * the kernel's input owner, so nothing else can take input away
      * mid-session. Without it input_read_* is denied. */
     if (window_register_service() != 0) {
-        wlc_log("[wl] could not claim input ownership\n");
         return false;
     }
 
     g_out.canvas = (uint32_t *)malloc((size_t)w * h * sizeof(uint32_t));
-    if (!g_out.canvas) { wlc_log("[wl] out of memory for the output\n"); return false; }
+    if (!g_out.canvas) return false;
     g_out.w = w;
     g_out.h = h;
     g_out.hosted = false;
@@ -479,7 +460,6 @@ static bool output_open_panel(void)
     g_out.fb_stride = panel_stride(w);
     g_ptr_x = (int32_t)(w / 2u);
     g_ptr_y = (int32_t)(h / 2u);
-    wlc_logf_u32("[wl] panel output, width=", w);
     return true;
 }
 
@@ -506,13 +486,12 @@ static bool output_open_hosted(void)
      * early for one, and WM_Taskbar.c, which skips it.
      */
     window_id_t win = window_create_ex(0u, 0u, w, h, 0u, "Wayland");
-    if (win == 0u) { wlc_log("[wl] window_create failed\n"); return false; }
+    if (win == 0u) return false;
     window_set_system(win, true);
 
     uint32_t bw = 0, bh = 0;
     uint32_t *pixels = window_get_backing_store(win, &bw, &bh);
     if (!pixels || bw == 0u || bh == 0u) {
-        wlc_log("[wl] no backing store for the Wayland window\n");
         window_destroy(win);
         return false;
     }
@@ -532,7 +511,6 @@ static bool output_open_hosted(void)
     (void)window_subscribe_mouse(win);
     window_show(win);
     window_raise(win);
-    wlc_logf_u32("[wl] hosted as the session surface, width=", bw);
     return true;
 }
 
@@ -733,7 +711,6 @@ static void output_follow_resize(void)
     uint32_t bw = 0u, bh = 0u;
     uint32_t *pixels = window_get_backing_store(g_out.win, &bw, &bh);
     if (!pixels || bw == 0u || bh == 0u) {
-        wlc_log("[wl] lost the backing store across a resize\n");
         return;
     }
     if (pixels == g_out.canvas && bw == g_out.w && bh == g_out.h) return;
@@ -744,7 +721,6 @@ static void output_follow_resize(void)
     (void)window_set_surface_opaque(g_out.win, false);
     reclamp_windows();
     g_dirty = true;
-    wlc_logf_u32("[wl] output resized, width=", bw);
 }
 
 /* "panel" / "hosted" force a backend; anything else picks whichever fits
@@ -765,8 +741,6 @@ static int read_mode(void)
 
 void _start(void)
 {
-    wlc_log("[wl] compositor starting\n");
-
     int mode = read_mode();
     bool opened = false;
 
@@ -782,7 +756,6 @@ void _start(void)
     if (wm_running) opened = output_open_hosted();
     if (!opened && mode != MODE_HOSTED) opened = output_open_panel();
     if (!opened) {
-        wlc_log("[wl] no usable output, giving up\n");
         process_exit(1);
     }
 
@@ -791,10 +764,9 @@ void _start(void)
     g_zcount = 0;
 
     int32_t ls = u_socket();
-    if (ls < 0) { wlc_log("[wl] u_socket FAILED\n"); process_exit(1); }
-    if (u_bind(ls, WL_SOCK_PATH) < 0) { wlc_log("[wl] u_bind FAILED\n"); process_exit(1); }
-    if (u_listen(ls) < 0) { wlc_log("[wl] u_listen FAILED\n"); process_exit(1); }
-    wlc_log("[wl] listening on " WL_SOCK_PATH "\n");
+    if (ls < 0) process_exit(1);
+    if (u_bind(ls, WL_SOCK_PATH) < 0) process_exit(1);
+    if (u_listen(ls) < 0) process_exit(1);
 
     /* Paint once up front so the session is visible before any client
      * connects -- in panel mode this is the whole screen. */
@@ -824,14 +796,12 @@ void _start(void)
          * WM exits there is nothing to rebuild: take the panel and carry on
          * with the same clients still connected. */
         if (g_out.hosted && window_get_wm_pid() < 0) {
-            wlc_log("[wl] window manager gone, taking over the panel\n");
             g_out.hosted = false;
             if (output_open_panel()) {
                 reclamp_windows();
                 g_dirty = true;
                 busy = true;
             } else {
-                wlc_log("[wl] panel takeover failed, exiting\n");
                 process_exit(1);
             }
         }

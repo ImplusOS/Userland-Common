@@ -5,6 +5,7 @@
 #include "../Font/WM_Font.h"
 #include "WM_Icons.h"
 #include "WM_Taskbar.h"
+#include "../Animation/WM_Animation.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -15,14 +16,25 @@ static wm_rect_t screen_bounds(const wm_state_t *state)
                        state->compositor.framebuffer_height};
 }
 
+/* Where the toasts can be: the stack above the taskbar, one card per
+ * active toast plus one (so the frame after a toast expires also clears
+ * the slot it left), with room for the slide-in and the card shadow.
+ * Only this is repainted while toasts animate -- not the whole right-hand
+ * column of the screen. */
 static wm_rect_t notification_area(const wm_state_t *state)
 {
+    uint32_t active = 0u;
+    for (uint32_t i = 0; i < WM_MAX_NOTIFICATIONS; ++i)
+        if (state->notifications[i].active) ++active;
+    uint32_t cards = active + 1u;
+    if (cards > WM_MAX_NOTIFICATIONS) cards = WM_MAX_NOTIFICATIONS;
+    int32_t bottom = wm_taskbar_rect(state).y;
+    int32_t top = bottom - 12 - (int32_t)(cards * 106u) - 16;
+    if (top < 0) top = 0;
     uint32_t width = wm_min_u32(412u, state->compositor.framebuffer_width);
     return (wm_rect_t){
         (int32_t)(state->compositor.framebuffer_width - width),
-        0,
-        width,
-        state->compositor.framebuffer_height
+        top, width, (uint32_t)(bottom - top)
     };
 }
 
@@ -33,16 +45,18 @@ wm_rect_t wm_notification_center_rect(const wm_state_t *state)
     uint32_t width = wm_min_u32(392u,
         state->compositor.framebuffer_width > 20u ?
             state->compositor.framebuffer_width - 20u : state->compositor.framebuffer_width);
-    int32_t y = 10;
-    uint32_t height = dock.y > y + 14 ? (uint32_t)(dock.y - y - 14) :
-        state->compositor.framebuffer_height > 20u ?
-            state->compositor.framebuffer_height - 20u : state->compositor.framebuffer_height;
-    return (wm_rect_t){
+    /* Anchored to the bottom: the center opens up out of the taskbar. */
+    int32_t bottom = dock.y - 10;
+    uint32_t max_h = bottom > 10 ? (uint32_t)(bottom - 10) : 0u;
+    uint32_t height = wm_min_u32(560u, max_h);
+    wm_rect_t rest = {
         (int32_t)state->compositor.framebuffer_width - (int32_t)width - 10,
-        y,
+        bottom - (int32_t)height,
         width,
         height
     };
+    rest.y += wm_panel_slide_offset(&state->notification_anim, rest, dock.y);
+    return rest;
 }
 
 static void damage_notifications(wm_state_t *state)
@@ -50,6 +64,18 @@ static void damage_notifications(wm_state_t *state)
     if (!state) return;
     wm_region_add(&state->compositor.damage, notification_area(state),
                   screen_bounds(state));
+}
+
+/* The center itself is repainted by wm_panel_animation_tick() as it slides;
+ * this covers the toasts it hides or reveals and in-place changes such as
+ * scrolling. */
+static void damage_center(wm_state_t *state)
+{
+    wm_rect_t r = wm_notification_center_rect(state);
+    wm_region_add(&state->compositor.damage,
+        (wm_rect_t){r.x - 16, r.y - 12, r.w + 32u, r.h + 40u},
+        screen_bounds(state));
+    damage_notifications(state);
 }
 
 static void push_history(wm_state_t *state, const char *title,
@@ -130,14 +156,14 @@ void wm_notification_toggle_center(wm_state_t *state)
     if (!state) return;
     state->notification_center_open = !state->notification_center_open;
     if (state->notification_center_open) state->notification_unread_count = 0u;
-    damage_notifications(state);
+    damage_center(state);
 }
 
 void wm_notification_close_center(wm_state_t *state)
 {
     if (!state || !state->notification_center_open) return;
     state->notification_center_open = false;
-    damage_notifications(state);
+    damage_center(state);
 }
 
 bool wm_notification_center_contains(const wm_state_t *state, int32_t x, int32_t y)
@@ -147,30 +173,34 @@ bool wm_notification_center_contains(const wm_state_t *state, int32_t x, int32_t
                               wm_notification_center_rect(state));
 }
 
-static uint32_t max_center_scroll(const wm_state_t *state)
+#define CENTER_CARD_H     68u
+#define CENTER_CARD_PITCH 76u   /* card plus the gap under it */
+
+/* The scrolling part of the center, below its header. */
+static wm_rect_t center_list_rect(wm_rect_t panel)
 {
-    if (!state) return 0u;
-    wm_rect_t panel = wm_notification_center_rect(state);
-    uint32_t list_height = panel.h > 92u ? panel.h - 92u : 0u;
-    uint32_t content_height = state->notification_history_count == 0u ? 0u :
-        state->notification_history_count * 76u + 12u;
-    return content_height > list_height ? (content_height - list_height + 75u) / 76u : 0u;
+    return (wm_rect_t){panel.x + 12, panel.y + 84, panel.w - 24u,
+                       panel.h > 96u ? panel.h - 96u : 0u};
 }
 
-bool wm_notification_center_scroll(wm_state_t *state, int32_t rows)
+static float max_center_scroll(const wm_state_t *state)
 {
-    if (!state || !state->notification_center_open || rows == 0) return false;
-    uint32_t old = state->notification_center_scroll;
-    uint32_t max_scroll = max_center_scroll(state);
-    int32_t next = (int32_t)state->notification_center_scroll + rows;
-    if (next < 0) next = 0;
-    if ((uint32_t)next > max_scroll) next = (int32_t)max_scroll;
-    state->notification_center_scroll = (uint32_t)next;
-    if (old != state->notification_center_scroll) {
-        damage_notifications(state);
-        return true;
-    }
-    return false;
+    if (!state) return 0.0f;
+    wm_rect_t list = center_list_rect(wm_notification_center_rect(state));
+    uint32_t content_height = state->notification_history_count == 0u ? 0u :
+        state->notification_history_count * CENTER_CARD_PITCH -
+        (CENTER_CARD_PITCH - CENTER_CARD_H);
+    return content_height > list.h ? (float)(content_height - list.h) : 0.0f;
+}
+
+bool wm_notification_center_scroll(wm_state_t *state, int32_t delta_px)
+{
+    if (!state || !state->notification_center_open || delta_px == 0) return false;
+    /* The glide itself is driven, and repainted, by
+     * wm_panel_animation_tick(). */
+    return wm_scroll_to(&state->notification_center_scroll,
+                        state->notification_center_scroll.target + (float)delta_px,
+                        max_center_scroll(state));
 }
 
 static uint32_t apply_opacity(uint32_t color, uint8_t opacity)
@@ -236,9 +266,11 @@ static void draw_notification_card(wm_state_t *state, wm_canvas_t *canvas,
     }
 }
 
+/* Toasts stack upward from just above the taskbar, newest-slot lowest,
+ * and slide up into place (down and out when they expire). */
 static void draw_popups(wm_state_t *state, wm_canvas_t *canvas, uint64_t now_ms)
 {
-    int32_t y = 12;
+    int32_t y = wm_taskbar_rect(state).y - 12 - 96;
     for (uint32_t i = 0; i < WM_MAX_NOTIFICATIONS; ++i) {
         wm_notification_t *notification = &state->notifications[i];
         if (!notification->active) continue;
@@ -259,9 +291,8 @@ static void draw_popups(wm_state_t *state, wm_canvas_t *canvas, uint64_t now_ms)
             state->compositor.framebuffer_width > 16u ?
                 state->compositor.framebuffer_width - 16u : 0u);
         wm_rect_t card = {
-            (int32_t)state->compositor.framebuffer_width - (int32_t)width - 12 +
-                (int32_t)offset,
-            y,
+            (int32_t)state->compositor.framebuffer_width - (int32_t)width - 12,
+            y + (int32_t)offset,
             width,
             96u
         };
@@ -272,20 +303,19 @@ static void draw_popups(wm_state_t *state, wm_canvas_t *canvas, uint64_t now_ms)
         draw_notification_card(state, canvas, card, notification->title,
                                notification->message, opacity, true,
                                remaining_width);
-        y += 106;
+        y -= 106;
     }
 }
 
 static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
 {
-    if (!state->notification_center_open) return;
+    if (!wm_panel_visible(&state->notification_anim,
+                          state->notification_center_open)) return;
     const theme_t *th = &state->theme.color;
     wm_rect_t panel = wm_notification_center_rect(state);
     wm_rect_t halo = {panel.x - 12, panel.y - 6, panel.w + 24u, panel.h + 24u};
     if (!wm_rect_intersects(halo, canvas->clip)) return;
-    uint32_t max_scroll = max_center_scroll(state);
-    if (state->notification_center_scroll > max_scroll)
-        state->notification_center_scroll = max_scroll;
+    wm_scroll_clamp(&state->notification_center_scroll, max_center_scroll(state));
 
     uint32_t radius = THEME_RADIUS_LARGE;
     uint32_t container = th->surface;
@@ -318,8 +348,7 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
         (wm_rect_t){panel.x + 16, panel.y + 70, panel.w - 32u, 1u},
         th->border);
 
-    wm_rect_t list = {panel.x + 12, panel.y + 84, panel.w - 24u,
-                      panel.h > 96u ? panel.h - 96u : 0u};
+    wm_rect_t list = center_list_rect(panel);
     wm_rect_t old_clip = canvas->clip;
     wm_canvas_set_clip(canvas, wm_rect_intersection(old_clip, list));
     if (state->notification_history_count == 0u) {
@@ -333,13 +362,13 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
                      list.y + 76, empty, th->text_dim,
                      THEME_FONT_BODY, list.w);
     } else {
-        int32_t y = list.y - (int32_t)(state->notification_center_scroll * 76u);
+        int32_t y = list.y - wm_scroll_offset(&state->notification_center_scroll);
         for (uint32_t display = 0u; display < state->notification_history_count; ++display) {
             uint32_t idx = history_index_for(state, display);
             if (idx >= WM_MAX_NOTIFICATION_HISTORY) continue;
             wm_notification_history_t *item = &state->notification_history[idx];
             if (!item->valid) continue;
-            wm_rect_t card = {list.x, y, list.w, 68u};
+            wm_rect_t card = {list.x, y, list.w, CENTER_CARD_H};
             if (wm_rect_intersects(card, list)) {
                 wm_canvas_fill_rounded(canvas, card,
                     THEME_RADIUS,
@@ -361,7 +390,7 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
                              item->message, th->text_dim,
                              THEME_FONT_SMALL, item_max);
             }
-            y += 76;
+            y += (int32_t)CENTER_CARD_PITCH;
         }
     }
     canvas->clip = old_clip;
@@ -370,6 +399,8 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
 void wm_notification_draw(wm_state_t *state, wm_canvas_t *canvas, uint64_t now_ms)
 {
     if (!state || !canvas) return;
+    wm_rect_t clip = wm_panel_begin_clip(state, canvas, &state->notification_anim);
     draw_center(state, canvas);
+    wm_canvas_set_clip(canvas, clip);
     if (!state->notification_center_open) draw_popups(state, canvas, now_ms);
 }

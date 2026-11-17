@@ -39,9 +39,6 @@ static const char *const k_icon_file[] = {
     [WM_ICON_EDIT]          = "edit",
     [WM_ICON_ARROW_BACK]    = "arrow_back",
     [WM_ICON_MEMORY]        = "memory",
-    [WM_ICON_INFO]          = "info",
-    [WM_ICON_WARNING]       = "warning",
-    [WM_ICON_ERROR]         = "error",
 };
 #define ICON_COUNT ((int)(sizeof(k_icon_file) / sizeof(k_icon_file[0])))
 

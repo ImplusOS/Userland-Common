@@ -2,7 +2,6 @@
 
 #include "File.h"
 #include "Process.h"
-#include "Serial.h"
 #include "XSession.h"
 
 /* The launcher provides a visible, deterministic Wine smoke test. To run a
@@ -57,12 +56,7 @@ static const char *wine_args(void)
         (void)file_close(fd);
         if (got > 0) {
             copy_args(args, (uint32_t)sizeof(args), file_args, (uint32_t)got);
-            if (args[0] != '\0') {
-                serial_write_string("[wine] using ");
-                serial_write_string(WINE_ARGS_FILE);
-                serial_write_string("\n");
-                return args;
-            }
+            if (args[0] != '\0') return args;
         }
     }
     copy_args(args, (uint32_t)sizeof(args), WINE_DEFAULT_ARGS,
@@ -74,7 +68,6 @@ void _start(void)
 {
     xsession_t session;
     if (xsession_open(&session, "Wine", 1024u, 680u) < 0) {
-        serial_write_string("[wine] no X server; giving up\n");
         process_exit(1);
     }
 
@@ -94,10 +87,8 @@ void _start(void)
      * __wineboot_event) and then runs the program in the finished prefix. */
     for (uint32_t retry = 0u; status == WINE_STATUS_PREFIX_NOT_READY &&
                               retry < WINE_PREFIX_RETRIES; ++retry) {
-        serial_write_string("[wine] prefix still being built; starting again\n");
         status = xsession_run(&session, WINE_LOADER_PATH, args);
     }
-    if (status < 0) serial_write_string("[wine] could not start wine\n");
     xsession_close(&session);
     process_exit(status < 0 ? 1 : status);
 }

@@ -30,6 +30,7 @@ COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/stdlib.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/errno.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/posix.o \
+               $(COMMON_LIBS_DIR)/libc/I_libc/src/resolv.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/dlfcn.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/sys/syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/sys/$(ARCH)/hal_syscall.o \
@@ -42,8 +43,6 @@ COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/API/LinuxEnv.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/math.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/stdio.o \
-               $(COMMON_LIBS_DIR)/Service/service_client.o \
-               $(COMMON_LIBS_DIR)/Service/com.ImplusOS.netstack/DNS/DNS.o \
                $(COMMON_LIBRARY_OBJS)
 
 COMMON_DEPS :=

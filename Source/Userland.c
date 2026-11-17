@@ -14,7 +14,6 @@
 #include "../API/Source/Window.h"
 #include "../API/Source/Input.h"
 #include "../API/Source/SystemInfo.h"
-#include "../Service/Source/service_client.h"
 #include "Unicode/UTF8/UTF8.h"
 #include "Crypto/Crypto.h"
 #include <Identifier/Identifier.h>
@@ -1297,11 +1296,6 @@ void _start(void) {
      * first, so it grows out of the black panel the kernel handed over
      * instead of flashing at full size and then fading up. */
     intro_transition(INTRO_DURATION_MS);
-
-    /* Pull in the Userland services (POSIX, network stack, ...) listed in
-     * /Userland/Service/services.list. Each is a hot-loadable .so and can
-     * be dropped again at runtime via service_unload(). */
-    service_load_all();
 
     static const char *const login_paths[] = {
         "/Userland/com.ImplusOS.loginui/com.ImplusOS.loginui.ELF",

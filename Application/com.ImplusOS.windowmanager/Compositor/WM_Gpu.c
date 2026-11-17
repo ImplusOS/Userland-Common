@@ -4,7 +4,6 @@
 #include "WM_Raster.h"
 #include "WM_Virgl.h"
 #include "../Decoration/WM_Decoration.h"
-#include "../UI/WM_Dialog.h"
 #include "../UI/WM_Icons.h"
 #include "../UI/WM_Notification.h"
 #include "../UI/WM_StartMenu.h"
@@ -199,15 +198,6 @@ static uint32_t align_up(uint32_t value, uint32_t align)
     return (value + align - 1u) / align * align;
 }
 
-static void log_failure(const char *what, int64_t rc)
-{
-    serial_write_string("[wm-gpu] ");
-    serial_write_string(what);
-    serial_write_string(" failed rc=");
-    serial_write_uint64((uint64_t)rc);
-    serial_write_string("\n");
-}
-
 static int64_t gpu_ioctl(uint32_t nr, void *arg, uint32_t size)
 {
     return file_ioctl(g.fd, WM_IOWR(nr, size), arg);
@@ -274,7 +264,6 @@ static bool resource_create(gpu_texture_t *t, uint32_t target,
     int64_t rc = gpu_ioctl(DRM_NR_VIRTGPU_RESOURCE_CREATE, &create,
                            sizeof(create));
     if (rc < 0 || create.bo_handle == 0u) {
-        log_failure("RESOURCE_CREATE", rc);
         return false;
     }
     t->bo = create.bo_handle;
@@ -287,13 +276,11 @@ static bool resource_create(gpu_texture_t *t, uint32_t target,
     virtgpu_map_t m = { 0u, t->bo, 0u };
     rc = gpu_ioctl(DRM_NR_VIRTGPU_MAP, &m, sizeof(m));
     if (rc < 0) {
-        log_failure("MAP", rc);
         texture_release(t);
         return false;
     }
     t->pixels = (uint32_t *)file_dev_mmap(g.fd, m.offset, t->bytes);
     if (!t->pixels) {
-        log_failure("dev_mmap", -1);
         texture_release(t);
         return false;
     }
@@ -332,7 +319,6 @@ static bool texture_upload(const gpu_texture_t *t, wm_rect_t r)
     tr.offset = ((uint32_t)r.y * t->width + (uint32_t)r.x) * 4u;
     int64_t rc = gpu_ioctl(DRM_NR_VIRTGPU_TRANSFER_TO_HOST, &tr, sizeof(tr));
     if (rc < 0) {
-        log_failure("TRANSFER_TO_HOST", rc);
         return false;
     }
     return true;
@@ -356,7 +342,6 @@ static void canvas_for(wm_canvas_t *canvas, const gpu_texture_t *t)
 static bool submit(void)
 {
     if (g.cmd.overflow) {
-        log_failure("command stream overflow", -1);
         return false;
     }
     if (g.cmd.length == 0u) return true;
@@ -370,7 +355,6 @@ static bool submit(void)
     int64_t rc = gpu_ioctl(DRM_NR_VIRTGPU_EXECBUFFER, &exec, sizeof(exec));
     wm_virgl_stream_reset(&g.cmd);
     if (rc < 0) {
-        log_failure("EXECBUFFER", rc);
         return false;
     }
     return true;
@@ -476,7 +460,6 @@ bool wm_gpu_init(wm_state_t *state)
     file_stat_t st;
     memset(&st, 0, sizeof(st));
     if (file_stat(WM_GPU_DISABLE_FILE, &st) >= 0 && st.exists) {
-        serial_write_string("[wm-gpu] disabled by " WM_GPU_DISABLE_FILE "\n");
         return false;
     }
 
@@ -490,7 +473,6 @@ bool wm_gpu_init(wm_state_t *state)
                                  (uint64_t)(uintptr_t)&has_3d };
     if (gpu_ioctl(DRM_NR_VIRTGPU_GETPARAM, &param, sizeof(param)) < 0 ||
         has_3d == 0u) {
-        serial_write_string("[wm-gpu] no 3D backend; CPU compositing\n");
         shutdown_device();
         return false;
     }
@@ -536,16 +518,10 @@ bool wm_gpu_init(wm_state_t *state)
     }
     int64_t rc = scanout(IMPLUS_SCANOUT_SET, (wm_rect_t){0, 0, 0u, 0u});
     if (rc < 0) {
-        log_failure("SCANOUT_SET", rc);
         shutdown_device();
         return false;
     }
     g.active = true;
-    serial_write_string("[wm-gpu] compositing on the GPU (virgl), ");
-    serial_write_uint32(width);
-    serial_write_string("x");
-    serial_write_uint32(height);
-    serial_write_string("\n");
     return true;
 }
 
@@ -580,7 +556,6 @@ void wm_gpu_resize(wm_state_t *state)
              scanout(IMPLUS_SCANOUT_SET, (wm_rect_t){0, 0, 0u, 0u}) >= 0;
     }
     if (!ok) {
-        serial_write_string("[wm-gpu] resize failed; CPU compositing\n");
         shutdown_device();
         return;
     }
@@ -753,7 +728,6 @@ static bool update_overlay(wm_state_t *state, const wm_rect_t *rects,
         wm_start_menu_draw(state, &canvas);
         wm_notification_draw(state, &canvas, now_ms);
         wm_wifi_panel_draw(state, &canvas);
-        wm_dialog_draw(state, &canvas);
 
         /* Most damage -- a window dragged across the desktop -- never
          * touches the shell. Uploading it anyway would put back the
@@ -1034,7 +1008,6 @@ bool wm_gpu_render(wm_state_t *state, const wm_rect_t *rects, uint32_t count,
     }
     wm_virgl_stream_reset(&g.cmd);
     if (render_frame(state, rects, count, full, now_ms)) return true;
-    serial_write_string("[wm-gpu] frame failed; back to CPU compositing\n");
     shutdown_device();
     return false;
 }

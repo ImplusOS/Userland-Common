@@ -17,14 +17,16 @@ typedef struct {
 wm_rect_t wm_start_menu_rect(const wm_state_t *state);
 void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas);
 wm_launcher_action_t wm_start_menu_hit_test(wm_state_t *state, int32_t x, int32_t y);
-bool wm_start_menu_scroll(wm_state_t *state, int32_t rows);
+/* Glide the app list by `delta_px` (positive = further down the list), or
+ * by whole viewports. True if the scroll target moved. */
+bool wm_start_menu_scroll(wm_state_t *state, int32_t delta_px);
+bool wm_start_menu_scroll_page(wm_state_t *state, int32_t pages);
 void wm_start_menu_clamp_scroll(wm_state_t *state);
 bool wm_start_menu_input_char(wm_state_t *state, char ch);
 bool wm_start_menu_input_backspace(wm_state_t *state);
 
-/* Move the keyboard selection by `delta` application rows, skipping section
- * headings and scrolling to keep the selection visible. Returns true if the
- * menu needs repainting. */
+/* Move the keyboard selection by `delta` application rows, scrolling to
+ * keep the selection visible. Returns true if the menu needs repainting. */
 bool wm_start_menu_move_selection(wm_state_t *state, int32_t delta);
 
 /* Launch the selected entry, or the first result when none is selected.

@@ -2,7 +2,6 @@
 #include <stddef.h>
 
 #include "Process.h"
-#include "Serial.h"
 #include "XSession.h"
 
 /*
@@ -72,14 +71,10 @@ void _start(void)
 
     if (xsession_open(&session, "Terminal", TERMINAL_WINDOW_W,
                       TERMINAL_WINDOW_H) < 0) {
-        serial_write_string("[terminal] no X server; giving up\n");
         process_exit(1);
     }
 
     int32_t status = xsession_run(&session, XTERM_PATH, XTERM_ARGS);
-    if (status < 0) {
-        serial_write_string("[terminal] could not start xterm\n");
-    }
 
     xsession_close(&session);
     process_exit(status < 0 ? 1 : status);

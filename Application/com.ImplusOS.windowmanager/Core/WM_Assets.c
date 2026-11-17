@@ -5,7 +5,6 @@
 
 #include "../../../../Userland/API/Source/File.h"
 #include "../../../../Userland/API/Source/Process.h"
-#include "../../../../Userland/API/Source/Serial.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -276,10 +275,33 @@ static bool load_registry(wm_assets_t *assets, const char *path)
     return assets->app_count != 0u;
 }
 
-/* Order the launcher by category, then by name inside it, so the Start menu
- * can walk the array once and emit a section header whenever the category
- * changes. Insertion sort: the list is short and already close to sorted
- * (each source directory contributes a run). */
+/* Sort rank of one name byte: symbols, then letters (case-insensitive),
+ * then digits, then everything non-ASCII (Japanese names, in UTF-8 byte
+ * order, which is code-point order). */
+static uint32_t name_sort_key(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+    uint32_t group;
+    if (c >= 0x80u)                group = 3u;
+    else if (c >= '0' && c <= '9') group = 2u;
+    else if (c >= 'a' && c <= 'z') group = 1u;
+    else                           group = 0u;
+    return (group << 8) | c;
+}
+
+static int compare_app_names(const char *a, const char *b)
+{
+    for (;; ++a, ++b) {
+        if (!*a || !*b) return (int)(unsigned char)*a - (int)(unsigned char)*b;
+        uint32_t ka = name_sort_key((unsigned char)*a);
+        uint32_t kb = name_sort_key((unsigned char)*b);
+        if (ka != kb) return ka < kb ? -1 : 1;
+    }
+}
+
+/* Order the launcher by name alone -- symbols, then A-Z, then digits (see
+ * name_sort_key) -- as one flat list with no category sections.
+ * Insertion sort: the list is short. */
 static void sort_apps(wm_assets_t *assets)
 {
     for (uint32_t i = 1u; i < assets->app_count; ++i) {
@@ -287,9 +309,7 @@ static void sort_apps(wm_assets_t *assets)
         uint32_t j = i;
         while (j > 0u) {
             const wm_launcher_app_t *previous = &assets->apps[j - 1u];
-            bool after = previous->category < key.category ||
-                (previous->category == key.category &&
-                 strcmp(previous->name, key.name) <= 0);
+            bool after = compare_app_names(previous->name, key.name) <= 0;
             if (after) break;
             assets->apps[j] = assets->apps[j - 1u];
             --j;
@@ -298,41 +318,6 @@ static void sort_apps(wm_assets_t *assets)
     }
 }
 
-
-static void load_system_icon(wm_icon_image_t *icon, const char *name)
-{
-    if (!icon || !name) return;
-    char path[160];
-    snprintf(path, sizeof(path),
-             "/Userland/com.ImplusOS.windowmanager/Resource/Icons/%s.png",
-             name);
-    icon->pixels = wm_assets_load_png(path, &icon->width, &icon->height);
-}
-
-static wm_icon_image_t *system_icon_at(wm_assets_t *assets, uint32_t index,
-                                       const char **name)
-{
-    if (!assets || !name) return NULL;
-    switch (index) {
-    case 0:  *name = "Launcher";     return &assets->system_icons.launcher;
-    case 1:  *name = "Power";        return &assets->system_icons.power;
-    case 2:  *name = "Reboot";       return &assets->system_icons.reboot;
-    case 3:  *name = "Notification"; return &assets->system_icons.notification;
-    case 4:  *name = "Network";      return &assets->system_icons.network;
-    case 5:  *name = "Volume";       return &assets->system_icons.volume;
-    case 6:  *name = "Battery";      return &assets->system_icons.battery;
-    case 7:  *name = "Close";        return &assets->system_icons.close;
-    case 8:  *name = "Maximize";     return &assets->system_icons.maximize;
-    case 9:  *name = "Restore";      return &assets->system_icons.restore;
-    case 10: *name = "Minimize";     return &assets->system_icons.minimize;
-    case 11: *name = "Window";       return &assets->system_icons.window;
-    case 12: *name = "Application";  return &assets->system_icons.application;
-    case 13: *name = "Search";       return &assets->system_icons.search;
-    default: return NULL;
-    }
-}
-
-#define WM_SYSTEM_ICON_COUNT 14u
 
 /* Load one launcher icon. Two sources, in order:
  *
@@ -432,21 +417,6 @@ bool wm_assets_init_metadata(wm_assets_t *assets)
 
     sort_apps(assets);
     assets->metadata_loaded = true;
-
-    /* One line per boot on COM1. Which applications the desktop offers is
-     * now decided by files on the image rather than by this binary, so "the
-     * menu is missing something" needs an answer from the boot log: how many
-     * descriptions were read, and how many of them were foreign programs. */
-    uint32_t linux_apps = 0u;
-    for (uint32_t i = 0; i < assets->app_count; ++i)
-        if (assets->apps[i].linux_backed) ++linux_apps;
-    char line[96];
-    (void)snprintf(line, sizeof(line),
-                   "[wm] launcher: %u app(s) from %u desktop entr(y|ies), "
-                   "%u running Linux binaries\n",
-                   (unsigned)assets->app_count, (unsigned)entry_count,
-                   (unsigned)linux_apps);
-    serial_write_string(line);
     return true;
 }
 
@@ -454,14 +424,6 @@ bool wm_assets_load_next_icon(wm_assets_t *assets)
 {
     if (!assets || !assets->metadata_loaded || assets->icons_loaded) {
         return false;
-    }
-
-    if (assets->system_icon_load_index < WM_SYSTEM_ICON_COUNT) {
-        uint32_t index = assets->system_icon_load_index++;
-        const char *name = NULL;
-        wm_icon_image_t *icon = system_icon_at(assets, index, &name);
-        if (icon && name) load_system_icon(icon, name);
-        return true;
     }
 
     if (assets->app_icon_load_index < assets->app_count) {
@@ -514,14 +476,14 @@ int32_t wm_assets_find_app(const wm_assets_t *assets, const char *path,
 bool wm_assets_load_logo(wm_assets_t *assets)
 {
     if (!assets) return false;
-    assets->system_icons.logo.pixels = wm_assets_load_png(
+    assets->logo.pixels = wm_assets_load_png(
         "/Userland/com.ImplusOS.windowmanager/Resource/Icons/Logo.png",
-        &assets->system_icons.logo.width,
-        &assets->system_icons.logo.height
+        &assets->logo.width,
+        &assets->logo.height
     );
-    if (!assets->system_icons.logo.pixels) {
-        assets->system_icons.logo.width = 0;
-        assets->system_icons.logo.height = 0;
+    if (!assets->logo.pixels) {
+        assets->logo.width = 0;
+        assets->logo.height = 0;
         return false;
     }
     return true;

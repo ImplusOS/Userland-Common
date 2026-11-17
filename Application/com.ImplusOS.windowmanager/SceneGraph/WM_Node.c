@@ -269,8 +269,8 @@ int32_t wm_scene_create_window(wm_state_t *state, int32_t owner_pid,
     window->layer = WM_LAYER_NORMAL;
     bool animate_show = window_should_animate_show(frame);
     window->visual_alpha = animate_show ? 0.0f : 1.0f;
-    window->visual_scale = animate_show ? 0.92f : 1.0f;
-    window->visual_offset_y = animate_show ? 14.0f : 0.0f;
+    window->visual_scale = 1.0f;
+    window->visual_offset_y = animate_show ? 12.0f : 0.0f;
     if (title) strncpy(window->title, title, sizeof(window->title) - 1u);
     if (!allocate_surface(window, frame.w, frame.h, false)) {
         free(window);

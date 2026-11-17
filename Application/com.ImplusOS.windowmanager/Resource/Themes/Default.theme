@@ -8,7 +8,7 @@ accent          = #6750A4
 mode            = light
 
 [Metrics]
-title_height    = 32
+title_height    = 27
 corner_radius   = 8
 shadow_size     = 8
 dock_height     = 40

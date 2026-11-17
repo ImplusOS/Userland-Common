@@ -147,9 +147,6 @@ extern wlc_output_t g_out;
 extern bool         g_dirty;
 
 /* ---- Compositor.c ---------------------------------------------------- */
-void wlc_log(const char *s);
-void wlc_logf_u32(const char *prefix, uint32_t value);
-void wlc_log_u32(const char *prefix, uint32_t value);
 uint32_t wlc_now_ms(void);
 
 int32_t wlc_window_alloc(wlc_client_t *c, uint32_t surface, uint32_t xdg_surface);

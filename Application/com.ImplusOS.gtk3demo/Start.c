@@ -3,7 +3,6 @@
 
 #include "LinuxEnv.h"
 #include "Process.h"
-#include "Serial.h"
 #include "Socket.h"
 #include "Window.h"
 
@@ -65,7 +64,6 @@ void _start(void)
     if (unix_socket_is_listening(WL_SOCKET_PATH) <= 0) {
         compositor = process_spawn_with_arg(COMPOSITOR_PATH, compositor_arg);
         if (compositor < 0) {
-            serial_write_string("[gtk3demo] compositor spawn failed\n");
             process_exit(1);
         }
 
@@ -76,8 +74,6 @@ void _start(void)
             waited += COMPOSITOR_POLL_MS;
         }
         if (waited >= COMPOSITOR_READY_TIMEOUT_MS) {
-            serial_write_string("[gtk3demo] compositor never bound "
-                                WL_SOCKET_PATH "\n");
             (void)process_kill(compositor);
             process_exit(1);
         }
@@ -94,10 +90,6 @@ void _start(void)
     linux_env_init(&env);
     (void)linux_env_load_for_program(&env, client);
     (void)linux_env_load_profile(&env, "x11-client");
-
-    serial_write_string("[gtk3demo] starting ");
-    serial_write_string(client);
-    serial_write_string("\n");
 
     int32_t pid = process_spawn_with_env(client, "",
                                          linux_env_entries(&env));

@@ -33,9 +33,6 @@ typedef enum {
     WM_ICON_EDIT,
     WM_ICON_ARROW_BACK,
     WM_ICON_MEMORY,          /* the process manager */
-    WM_ICON_INFO,            /* the three dialog severities */
-    WM_ICON_WARNING,
-    WM_ICON_ERROR,
 } wm_icon_kind_t;
 
 /* Draw `kind` centred in `box`, tinted `argb` (alpha respected). */

@@ -31,7 +31,8 @@ wm_rect_t wm_wifi_panel_rect(const wm_state_t *state);
 void wm_wifi_panel_draw(wm_state_t *state, wm_canvas_t *canvas);
 wm_wifi_action_t wm_wifi_panel_hit_test(wm_state_t *state, int32_t x, int32_t y);
 bool wm_wifi_panel_contains(const wm_state_t *state, int32_t x, int32_t y);
-bool wm_wifi_panel_scroll(wm_state_t *state, int32_t rows);
+/* Glide the network list by `delta_px`. True if the scroll target moved. */
+bool wm_wifi_panel_scroll(wm_state_t *state, int32_t delta_px);
 
 bool wm_wifi_panel_input_char(wm_state_t *state, char ch);
 bool wm_wifi_panel_input_backspace(wm_state_t *state);

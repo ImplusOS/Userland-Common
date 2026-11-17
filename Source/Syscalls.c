@@ -1070,55 +1070,6 @@ void window_show_notification(const char *title, const char *message)
     ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
 }
 
-static void window_show_dialog(uint32_t type, const char *title, const char *message)
-{
-    struct {
-        wm_msg_header_t hdr;
-        uint32_t type;
-        char title[64];
-        char message[128];
-    } cmd;
-
-    if (!title || !message) return;
-
-    cmd.hdr.type = WM_SHOW_DIALOG;
-    cmd.hdr.window_id = 0;
-    cmd.type = type;
-    os_strcpy_s(cmd.title, sizeof(cmd.title), title);
-    os_strcpy_s(cmd.message, sizeof(cmd.message), message);
-
-    ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
-}
-
-void window_set_theme(uint32_t accent, bool dark)
-{
-    struct {
-        wm_msg_header_t hdr;
-        uint32_t accent;
-        uint32_t dark;
-    } cmd;
-
-    cmd.hdr.type = WM_SET_THEME;
-    cmd.hdr.window_id = 0;
-    cmd.accent = accent;
-    cmd.dark = dark ? 1u : 0u;
-
-    ipc_send_message(window_get_wm_pid(), &cmd, sizeof(cmd));
-}
-
-void window_reload_background(void)
-{
-    wm_msg_header_t hdr;
-    hdr.type = WM_RELOAD_BACKGROUND;
-    hdr.window_id = 0;
-    ipc_send_message(window_get_wm_pid(), &hdr, sizeof(hdr));
-}
-
-void window_show_error(const char *title, const char *message)
-{
-    window_show_dialog(2u, title, message);
-}
-
 static uint32_t *window_get_backing_store_internal(window_id_t wid, uint32_t *out_w, uint32_t *out_h, int32_t wm_pid)
 {
     wm_msg_header_t request;

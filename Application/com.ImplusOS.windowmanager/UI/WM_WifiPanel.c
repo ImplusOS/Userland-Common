@@ -5,6 +5,7 @@
 #include "../Font/WM_Font.h"
 #include "WM_Icons.h"
 #include "WM_Taskbar.h"
+#include "../Animation/WM_Animation.h"
 #include "../../../../Userland/Source/Syscalls.h"
 
 #include <stdio.h>
@@ -29,16 +30,17 @@ wm_rect_t wm_wifi_panel_rect(const wm_state_t *state)
     uint32_t width = wm_min_u32(WIFI_PANEL_WIDTH,
         state->compositor.framebuffer_width > 20u ?
             state->compositor.framebuffer_width - 20u : state->compositor.framebuffer_width);
+    /* Anchored to the bottom: the panel opens up out of the taskbar. */
     wm_rect_t dock = wm_taskbar_rect(state);
-    int32_t y = 10;
-    uint32_t max_h = dock.y > y + 14 ? (uint32_t)(dock.y - y - 14) :
-        state->compositor.framebuffer_height > 20u ?
-            state->compositor.framebuffer_height - 20u : state->compositor.framebuffer_height;
+    int32_t bottom = dock.y - 10;
+    uint32_t max_h = bottom > 10 ? (uint32_t)(bottom - 10) : 0u;
     uint32_t height = wm_min_u32(440u, max_h);
-    return (wm_rect_t){
+    wm_rect_t rest = {
         (int32_t)state->compositor.framebuffer_width - (int32_t)width - 10,
-        y, width, height
+        bottom - (int32_t)height, width, height
     };
+    rest.y += wm_panel_slide_offset(&state->wifi_anim, rest, dock.y);
+    return rest;
 }
 
 bool wm_wifi_panel_contains(const wm_state_t *state, int32_t x, int32_t y)
@@ -77,10 +79,20 @@ static wm_rect_t list_start(wm_rect_t body, const wm_state_t *state)
                        body.h > (uint32_t)offset ? body.h - (uint32_t)offset : 0u};
 }
 
-static wm_rect_t list_row_rect(wm_rect_t list, uint32_t scroll, uint32_t index)
+static wm_rect_t list_row_rect(wm_rect_t list, const wm_scroll_t *scroll,
+                               uint32_t index)
 {
-    int32_t y = list.y - (int32_t)(scroll * WIFI_ROW_H) + (int32_t)(index * WIFI_ROW_H);
+    int32_t y = list.y - wm_scroll_offset(scroll) + (int32_t)(index * WIFI_ROW_H);
     return (wm_rect_t){list.x, y, list.w, WIFI_ROW_H - 6u};
+}
+
+static float max_list_scroll(const wm_state_t *state)
+{
+    const wm_wifi_panel_t *p = &state->wifi_panel;
+    wm_rect_t list = list_start(body_rect(wm_wifi_panel_rect(state)), state);
+    uint32_t content = p->result_count == 0u ? 0u :
+        p->result_count * WIFI_ROW_H - 6u;
+    return content > list.h ? (float)(content - list.h) : 0.0f;
 }
 
 static wm_rect_t pw_back_rect(wm_rect_t body)     { return (wm_rect_t){body.x, body.y, 88u, 24u}; }
@@ -225,6 +237,8 @@ static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
 {
     const theme_t *th = &state->theme.color;
     wm_rect_t list = list_start(body, state);
+    /* A rescan can return fewer networks than were scrolled past. */
+    wm_scroll_clamp(&state->wifi_panel.scroll, max_list_scroll(state));
     wm_rect_t old_clip = canvas->clip;
     wm_canvas_set_clip(canvas, wm_rect_intersection(old_clip, list));
 
@@ -237,7 +251,7 @@ static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
                      list.w > 16u ? list.w - 16u : 0u);
     } else {
         for (uint32_t i = 0u; i < p->result_count; ++i) {
-            wm_rect_t row = list_row_rect(list, p->scroll, i);
+            wm_rect_t row = list_row_rect(list, &p->scroll, i);
             if (!wm_rect_intersects(row, list)) continue;
             const wifi_scan_result_t *r = &p->results[i];
             bool is_current = is_connected(state) &&
@@ -251,7 +265,7 @@ static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
             draw_signal_bars(canvas, row.x + 16, row.y + (int32_t)row.h / 2 + 5,
                              r->rssi_dbm, on_container, th->border);
             wm_font_draw(&state->font, canvas, row.x + 48,
-                         row.y + ((int32_t)row.h - (int32_t)THEME_FONT_BODY) / 2 - 1,
+                         row.y + ((int32_t)row.h - (int32_t)THEME_FONT_BODY) / 2,
                          r->ssid, on_container, THEME_FONT_BODY,
                          row.w > 92u ? row.w - 92u : 0u);
             if (r->security != WIFI_SECURITY_OPEN) {
@@ -293,7 +307,7 @@ static void draw_password_view(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t
     masked[n] = '\0';
     const char *display = n > 0u ? masked : "パスワード";
     uint32_t tc = n > 0u ? th->text : th->text_dim;
-    int32_t text_y = field.y + ((int32_t)field.h - (int32_t)THEME_FONT_LARGE) / 2 - 1;
+    int32_t text_y = field.y + ((int32_t)field.h - (int32_t)THEME_FONT_LARGE) / 2;
     wm_font_draw(&state->font, canvas, field.x + 16, text_y,
                  display, tc, THEME_FONT_LARGE,
                  field.w > 32u ? field.w - 32u : 0u);
@@ -335,9 +349,19 @@ static void draw_password_view(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t
                  th->text_dim, THEME_FONT_SMALL, body.w);
 }
 
+static void draw_panel(wm_state_t *state, wm_canvas_t *canvas);
+
 void wm_wifi_panel_draw(wm_state_t *state, wm_canvas_t *canvas)
 {
-    if (!state || !canvas || !state->wifi_panel.open) return;
+    if (!state || !canvas ||
+        !wm_panel_visible(&state->wifi_anim, state->wifi_panel.open)) return;
+    wm_rect_t clip = wm_panel_begin_clip(state, canvas, &state->wifi_anim);
+    draw_panel(state, canvas);
+    wm_canvas_set_clip(canvas, clip);
+}
+
+static void draw_panel(wm_state_t *state, wm_canvas_t *canvas)
+{
     const theme_t *th = &state->theme.color;
     wm_rect_t panel = wm_wifi_panel_rect(state);
     if (panel.w == 0u || panel.h == 0u) return;
@@ -402,7 +426,7 @@ wm_wifi_action_t wm_wifi_panel_hit_test(wm_state_t *state, int32_t x, int32_t y)
 
     wm_rect_t list = list_start(body, state);
     for (uint32_t i = 0u; i < p->result_count; ++i) {
-        wm_rect_t row = list_row_rect(list, p->scroll, i);
+        wm_rect_t row = list_row_rect(list, &p->scroll, i);
         if (!wm_rect_intersects(row, list)) continue;
         if (wm_rect_intersects((wm_rect_t){x, y, 1u, 1u}, row)) {
             bool is_current = is_connected(state) &&
@@ -416,20 +440,14 @@ wm_wifi_action_t wm_wifi_panel_hit_test(wm_state_t *state, int32_t x, int32_t y)
     return none;
 }
 
-bool wm_wifi_panel_scroll(wm_state_t *state, int32_t rows)
+bool wm_wifi_panel_scroll(wm_state_t *state, int32_t delta_px)
 {
-    if (!state || !state->wifi_panel.open || state->wifi_panel.selected_index >= 0 || rows == 0) {
+    if (!state || !state->wifi_panel.open || state->wifi_panel.selected_index >= 0 || delta_px == 0) {
         return false;
     }
     wm_wifi_panel_t *p = &state->wifi_panel;
-    uint32_t visible = p->result_count;
-    uint32_t max_scroll = visible > 4u ? visible - 4u : 0u;
-    int32_t next = (int32_t)p->scroll + rows;
-    if (next < 0) next = 0;
-    if ((uint32_t)next > max_scroll) next = (int32_t)max_scroll;
-    if ((uint32_t)next == p->scroll) return false;
-    p->scroll = (uint32_t)next;
-    return true;
+    return wm_scroll_to(&p->scroll, p->scroll.target + (float)delta_px,
+                        max_list_scroll(state));
 }
 
 bool wm_wifi_panel_input_char(wm_state_t *state, char ch)

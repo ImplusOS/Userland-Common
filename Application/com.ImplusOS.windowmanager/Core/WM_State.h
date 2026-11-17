@@ -33,7 +33,7 @@
 #define WM_TASKBAR_AT_TOP              0
 
 /* Shell metrics (defaults; a .theme file's [Metrics] section overrides). */
-#define WM_TITLE_HEIGHT                32u
+#define WM_TITLE_HEIGHT                27u
 #define WM_CORNER_RADIUS               THEME_RADIUS
 #define WM_SHADOW_SIZE                 8u
 /* Drop-shadow spread under raised surfaces: menus, dialogs and panels, and
@@ -42,7 +42,7 @@
 #define WM_SHADOW_CARD                  6u
 #define WM_DOCK_HEIGHT                 40u
 #define WM_DOCK_MARGIN                 0u
-#define WM_TITLE_BUTTON_SIZE           26u
+#define WM_TITLE_BUTTON_SIZE           23u
 #define WM_TITLE_BUTTON_GAP             1u
 #define WM_TITLE_BUTTON_MARGIN          4u
 #define WM_MIN_WINDOW_WIDTH            160u
@@ -58,34 +58,6 @@ typedef struct {
     uint32_t w;
     uint32_t h;
 } wm_rect_t;
-
-typedef enum {
-    WM_DIALOG_INFO = 0,
-    WM_DIALOG_WARNING,
-    WM_DIALOG_ERROR
-} wm_dialog_type_t;
-
-#define WM_DIALOG_TITLE_MAX 64
-#define WM_DIALOG_MSG_MAX 256
-
-typedef struct {
-    char title[WM_DIALOG_TITLE_MAX];
-    char message[WM_DIALOG_MSG_MAX];
-    wm_dialog_type_t type;
-    bool active;
-    bool dragging;
-    bool hover_close;
-    bool hover_ok;
-    int32_t x;
-    int32_t y;
-    uint32_t w;
-    uint32_t h;
-    int32_t drag_start_x;
-    int32_t drag_start_y;
-    int32_t drag_origin_x;
-    int32_t drag_origin_y;
-    uint64_t start_ms;
-} wm_dialog_t;
 
 typedef struct {
     wm_rect_t rects[WM_MAX_DAMAGE_RECTS];
@@ -262,24 +234,6 @@ typedef struct {
     uint32_t height;
 } wm_icon_image_t;
 
-typedef struct {
-    wm_icon_image_t launcher;
-    wm_icon_image_t power;
-    wm_icon_image_t reboot;
-    wm_icon_image_t notification;
-    wm_icon_image_t network;
-    wm_icon_image_t volume;
-    wm_icon_image_t battery;
-    wm_icon_image_t close;
-    wm_icon_image_t maximize;
-    wm_icon_image_t restore;
-    wm_icon_image_t minimize;
-    wm_icon_image_t window;
-    wm_icon_image_t application;
-    wm_icon_image_t search;
-    wm_icon_image_t logo;
-} wm_system_icons_t;
-
 /* Where an entry in the launcher came from, which is also how it is
  * started. NATIVE is an ImplusOS ELF the kernel loads directly; LINUX is a
  * foreign glibc binary that only reaches the screen through a host launcher
@@ -334,8 +288,7 @@ typedef struct {
     uint32_t *wallpaper_pixels;
     uint32_t wallpaper_width;
     uint32_t wallpaper_height;
-    wm_system_icons_t system_icons;
-    uint32_t system_icon_load_index;
+    wm_icon_image_t logo;           /* the Start button (Resource/Icons/Logo.png) */
     uint32_t app_icon_load_index;
     bool metadata_loaded;
     bool icons_loaded;
@@ -392,6 +345,16 @@ typedef struct {
     bool ntp_ready;
 } wm_ntp_state_t;
 
+/* Scroll position of a popup list, in pixels from the top of its content.
+ * Input moves `target` (already clamped to the list's range); every frame
+ * wm_scroll_step() eases `pos` toward it, and drawing and hit-testing use
+ * `pos`, so a wheel notch or a page jump glides instead of snapping. */
+typedef struct {
+    float pos;
+    float target;
+    uint64_t last_ms;      /* time of the previous step; 0 while at rest  */
+} wm_scroll_t;
+
 /* State for the Wi-Fi settings panel (UI/WM_WifiPanel.c), opened from the
  * taskbar's network tray icon. selected_index < 0 shows the scan-result
  * list; selected_index >= 0 shows the password-entry sub-view for
@@ -403,7 +366,7 @@ typedef struct {
     bool open;
     wifi_scan_result_t results[WIFI_MAX_SCAN_RESULTS];
     uint32_t result_count;
-    uint32_t scroll;
+    wm_scroll_t scroll;
     int32_t selected_index;
     char password[WM_WIFI_PASSWORD_MAX + 1u];
     uint32_t password_len;
@@ -415,15 +378,17 @@ typedef struct {
     bool scan_active;
 } wm_wifi_panel_t;
 
-typedef enum {
-    WM_MENU_ROW_HEADER = 0,   /* `value` is a wm_app_category_t */
-    WM_MENU_ROW_APP           /* `value` indexes wm_assets_t.apps[] */
-} wm_menu_row_kind_t;
-
+/* Slide of a popup panel (Start menu, notification center, Wi-Fi) out
+ * from behind the taskbar. `hidden` is 0 in place and 1 fully below the
+ * taskbar's top edge; wm_panel_animation_tick() drives it from the panel's
+ * open flag, so the code that opens and closes panels does not change. */
 typedef struct {
-    uint16_t kind;
-    uint16_t value;
-} wm_menu_row_t;
+    bool shown;            /* open flag as of the last tick              */
+    bool active;           /* sliding now                                */
+    uint64_t start_ms;
+    float from;            /* `hidden` when the slide started            */
+    float hidden;
+} wm_panel_anim_t;
 
 typedef struct {
     wm_scene_t scene;
@@ -441,10 +406,13 @@ typedef struct {
     uint32_t notification_history_count;
     uint32_t notification_history_next;
     uint32_t notification_unread_count;
-    uint32_t notification_center_scroll;
+    wm_scroll_t notification_center_scroll;
     bool notification_center_open;
     bool launcher_open;
-    uint32_t launcher_scroll;
+    wm_panel_anim_t launcher_anim;
+    wm_panel_anim_t notification_anim;
+    wm_panel_anim_t wifi_anim;
+    wm_scroll_t launcher_scroll;
     int32_t launcher_hover_index;
     /* Start-menu keyboard selection, kept apart from the pointer's hover.
      * They cannot share a field: the hover is recomputed from the cursor
@@ -456,16 +424,15 @@ typedef struct {
     uint32_t taskbar_hover_kind;
     uint32_t taskbar_hover_window_id;
     char clock_text[32];
+    uint32_t clock_width;          /* taskbar clock slot, from its text */
     char search_text[WM_SEARCH_MAX];
     uint32_t search_len;
     bool search_active;
-    /* Start-menu viewport rows: section headers interleaved with app cards,
-     * so a category heading scrolls with the apps under it instead of being
-     * pinned. Sized for every app plus one header per category. */
-    wm_menu_row_t menu_rows[WM_MAX_LAUNCHER_APPS + WM_APP_CATEGORY_COUNT];
+    /* Start-menu viewport rows: the assets.apps[] index of each app that
+     * matches the current search, in display order. */
+    uint16_t menu_rows[WM_MAX_LAUNCHER_APPS];
     uint32_t filter_count;
     uint32_t filter_generation;
-    wm_dialog_t dialog;
     bool running;
     wm_ntp_state_t ntp;
     wm_wifi_panel_t wifi_panel;

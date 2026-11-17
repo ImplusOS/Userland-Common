@@ -3,7 +3,6 @@
 
 #include "Graphics.h"
 #include "Process.h"
-#include "Serial.h"
 #include "XSession.h"
 
 /*
@@ -96,7 +95,6 @@ void _start(void)
     static char argument[512];
     if (process_get_launch_argument(argument, (uint32_t)sizeof(argument)) < 0 ||
         argument[0] == '\0') {
-        serial_write_string("[linuxapp] no program given\n");
         process_exit(1);
     }
 
@@ -119,7 +117,6 @@ void _start(void)
         command = separator + 1;
     }
     if (command[0] != '/') {
-        serial_write_string("[linuxapp] program path must be absolute\n");
         process_exit(1);
     }
 
@@ -136,23 +133,13 @@ void _start(void)
     if (screen_w > SCREEN_MARGIN_W) width = clamp(width, screen_w - SCREEN_MARGIN_W);
     if (screen_h > SCREEN_MARGIN_H) height = clamp(height, screen_h - SCREEN_MARGIN_H);
 
-    serial_write_string("[linuxapp] hosting ");
-    serial_write_string(command);
-    serial_write_string("\n");
-
     xsession_t session;
     if (xsession_open(&session, title, width, height) < 0) {
-        serial_write_string("[linuxapp] no X server; giving up\n");
         process_exit(1);
     }
 
     int32_t status = xsession_run(&session, command,
                                   (arguments && arguments[0]) ? arguments : NULL);
-    if (status < 0) {
-        serial_write_string("[linuxapp] could not start ");
-        serial_write_string(command);
-        serial_write_string("\n");
-    }
 
     xsession_close(&session);
     process_exit(status < 0 ? 1 : status);

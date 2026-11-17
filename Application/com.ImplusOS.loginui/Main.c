@@ -29,7 +29,6 @@
 #include "Input.h"
 #include "File.h"
 #include "Process.h"
-#include "Serial.h"
 #include "Window.h"
 
 #include "Crypto/Crypto.h"
@@ -578,7 +577,6 @@ static bool try_autologin(void) {
     }
     if (!ok) return false;
 
-    serial_write_string("[loginui] autologin\n");
     start_session(name, uid); /* never returns */
     return true;
 }
@@ -598,17 +596,10 @@ static void start_session(const char *username, uint32_t uid) {
     snprintf(n, sizeof(n), "%u", uid);
     write_file_str(SESSION_UID, n);
 
-    serial_write_string("[loginui] session for ");
-    serial_write_string(username);
-    serial_write_string(" uid=");
-    serial_write_string(n);
-    serial_write_string("\n");
 
     int32_t wm = process_spawn(WM_PATH);
     if (wm >= 0) process_set_priority(wm, 3);
     process_yield();
-    { char b[48]; snprintf(b, sizeof(b), "[loginui] wm spawn -> %d\n", (int)wm);
-      serial_write_string(b); }
 
     /* Wait for the window manager to register, up to a minute. This is a
      * timeout, not a delay -- it ends the moment the WM is up. The old 6 s
@@ -621,8 +612,6 @@ static void start_session(const char *username, uint32_t uid) {
         if (wm_pid >= 0) break;
         sleep_ms(20);
     }
-    { char b[48]; snprintf(b, sizeof(b), "[loginui] wm_pid=%d\n", (int)wm_pid);
-      serial_write_string(b); }
     if (wm_pid >= 0) process_spawn(SYSNOTIF);
 
     for (;;) sleep_ms(1000);
@@ -797,20 +786,12 @@ int _start(void) {
     g_w = (int)get_display_width();
     g_h = (int)get_display_height();
     if (!g_fb || g_w <= 0 || g_h <= 0) {
-        serial_write_string("[loginui] no framebuffer\n");
         for (;;) sleep_ms(1000);
     }
 
     font_load();
     compose_wallpaper();
     db_load_users();
-
-    {
-        char dbg[64];
-        snprintf(dbg, sizeof(dbg), "[loginui] up %dx%d users=%u font=%d\n",
-                 g_w, g_h, g_user_count, (int)g_font_ok);
-        serial_write_string(dbg);
-    }
 
     if (try_autologin()) { /* never returns */ }
 

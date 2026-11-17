@@ -150,8 +150,6 @@ int32_t process_get_launch_argument(char *buf, uint32_t cap)
     snprintf(buf, cap, "%s", a);
     return 0;
 }
-void serial_write_string(const char *s) { fputs(s, stderr); fflush(stderr); }
-void serial_write_uint32(uint32_t v) { fprintf(stderr, "%u", v); fflush(stderr); }
 
 /* ---- display / input: a panel-mode output backed by plain memory ---- */
 #define OUT_W 1280u

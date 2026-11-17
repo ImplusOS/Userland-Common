@@ -294,7 +294,8 @@ static void draw_window_icon(wm_state_t *state, wm_canvas_t *canvas,
 {
     uint32_t isz = WM_DECOR_ICON_SIZE;
     int32_t x = frame.x + 9;
-    int32_t y = frame.y + (int32_t)((state->theme.title_height - isz) / 2u);
+    /* Centre in the visible bar: its top pixel is the frame's outline. */
+    int32_t y = frame.y + 1 + (int32_t)((state->theme.title_height - 1u - isz) / 2u);
     wm_icon_draw(canvas, (wm_rect_t){x,y,isz,isz}, WM_ICON_DOC,
                  apply_opacity(state->theme.color.text_dim, opacity));
 }
@@ -402,8 +403,8 @@ void wm_decoration_draw_window(wm_state_t *state, wm_canvas_t *canvas,
     if (window->title[0] && text_max != 0u) {
         int32_t text_x = frame.x + 9 + (int32_t)WM_DECOR_ICON_SIZE + 8;
         float size = THEME_FONT_BODY;
-        int32_t text_y = frame.y +
-            ((int32_t)state->theme.title_height - (int32_t)size) / 2 - 1;
+        int32_t text_y = frame.y + 1 +
+            ((int32_t)state->theme.title_height - 1 - (int32_t)size) / 2;
         wm_font_draw(&state->font, canvas, text_x, text_y,
                      window->title,
                      apply_opacity(window->has_focus ?

@@ -24,7 +24,6 @@
 
 #include "File.h"
 #include "Process.h"
-#include "Serial.h"
 
 #define PATH_MAX 512
 
@@ -100,7 +99,6 @@ void _start(void)
     char path[PATH_MAX];
     int32_t n = process_get_launch_argument(arg, sizeof(arg));
     if (n <= 0 || arg[0] == '\0') {
-        serial_write_string("[xdg-open] no target\n");
         process_exit(1);
     }
     /* The launch argument is argv[1..] joined with spaces; xdg-open takes a
@@ -111,9 +109,6 @@ void _start(void)
     file_stat_t st;
     int exists = file_stat(path, &st) >= 0 && st.exists;
     if (!exists) {
-        serial_write_string("[xdg-open] not found: ");
-        serial_write_string(path);
-        serial_write_string("\n");
         process_exit(2);
     }
 
@@ -131,8 +126,6 @@ void _start(void)
         else strcpy(dir, "/");
         pid = process_spawn_with_arg(FILE_MANAGER, dir);
     }
-    serial_write_string(pid >= 0 ? "[xdg-open] opened " : "[xdg-open] could not open ");
-    serial_write_string(path);
-    serial_write_string("\n");
+
     process_exit(pid >= 0 ? 0 : 3);
 }
