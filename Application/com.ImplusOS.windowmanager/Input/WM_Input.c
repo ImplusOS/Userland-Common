@@ -49,6 +49,18 @@ static void damage_start_menu(wm_state_t *state)
                   screen_bounds(state));
 }
 
+/* Repaint only the row whose highlight changed; the whole menu when the
+ * row cannot be placed (it scrolled out, or the results changed). */
+static void damage_launcher_row(wm_state_t *state, int32_t app_index)
+{
+    if (app_index < 0) return;
+    wm_rect_t row;
+    if (wm_start_menu_app_rect(state, app_index, &row))
+        wm_region_add(&state->compositor.damage, row, screen_bounds(state));
+    else
+        damage_start_menu(state);
+}
+
 static void damage_notification_center(wm_state_t *state)
 {
     if (!state) return;
@@ -361,7 +373,15 @@ static void update_hover(wm_state_t *state)
         if (action.kind == WM_LAUNCHER_ACTION_APP)
             state->launcher_hover_index = (int32_t)action.app_index;
     }
-    if (old_hover != state->launcher_hover_index) damage_start_menu(state);
+    int32_t new_hover = state->launcher_hover_index;
+    if (old_hover != new_hover) {
+        damage_launcher_row(state, old_hover);
+        damage_launcher_row(state, new_hover);
+        /* The keyboard selection is only drawn while nothing is hovered,
+         * so its row changes too when the pointer arrives or leaves. */
+        if ((old_hover < 0) != (new_hover < 0))
+            damage_launcher_row(state, state->launcher_selected_index);
+    }
 }
 
 static void update_taskbar_hover(wm_state_t *state)

@@ -360,6 +360,17 @@ void wm_font_draw(wm_font_t *font, wm_canvas_t *canvas,
     if (!font || !font->loaded || !canvas || !text || pixel_height <= 0.0f) return;
     wm_font_impl_t *impl = (wm_font_impl_t *)font->impl;
     FT_UInt pixels = (FT_UInt)(pixel_height + 0.5f);
+    /* Shell panels are repainted one damage rectangle at a time, and most
+     * of their labels lie outside any given one. A run of text stays
+     * within an em above and two below its box, so anything clear of the
+     * clip by more than that is skipped before FreeType is touched. */
+    const wm_rect_t clip = canvas->clip;
+    if (clip.w == 0u || clip.h == 0u) return;
+    int64_t clip_x0 = clip.x, clip_x1 = (int64_t)clip.x + clip.w;
+    int64_t clip_y0 = clip.y, clip_y1 = (int64_t)clip.y + clip.h;
+    if ((int64_t)y + 2 * (int64_t)pixels <= clip_y0 ||
+        (int64_t)y - (int64_t)pixels >= clip_y1) return;
+    if ((int64_t)x - (int64_t)pixels >= clip_x1) return;
     FT_Set_Pixel_Sizes(impl->face, 0, pixels);
     /* `y` is the top of the em box -- a pixel_height-tall box that the
      * glyphs sit centred in -- so callers can centre text in a rect with
@@ -385,8 +396,14 @@ void wm_font_draw(wm_font_t *font, wm_canvas_t *canvas,
         wm_glyph_t *glyph = glyph_get(impl, codepoint, pixel_height);
         if (!glyph) { previous = current; continue; }
         if (max_width != 0u && cursor_x + glyph->advance - x > (int32_t)max_width) break;
-        if (glyph->bitmap) {
+        /* Past the clip's right edge: so is everything after this. */
+        if ((int64_t)cursor_x - (int64_t)pixels >= clip_x1) break;
+        int64_t gx0 = (int64_t)cursor_x + glyph->x_offset;
+        if (glyph->bitmap && gx0 + glyph->width > clip_x0 && gx0 < clip_x1) {
             for (int row = 0; row < glyph->height; ++row) {
+                int64_t gy = (int64_t)baseline + glyph->y_offset + row;
+                if (gy < clip_y0) continue;
+                if (gy >= clip_y1) break;
                 for (int col = 0; col < glyph->width; ++col) {
                     uint32_t coverage = glyph->bitmap[row * glyph->width + col];
                     uint32_t alpha = (coverage * color_alpha) / 255u;

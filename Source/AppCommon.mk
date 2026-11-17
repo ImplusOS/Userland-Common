@@ -45,4 +45,12 @@ COMMON_OBJS := $(COMMON_LIBS_DIR)/Syscalls.o \
                $(COMMON_LIBS_DIR)/libc/I_libc/src/stdio.o \
                $(COMMON_LIBRARY_OBJS)
 
+# AArch64's long double is IEEE binary128, which has no hardware support:
+# every long double operation in libc (vsnprintf's %Lf path, the *l math
+# functions) lowers to a libgcc soft-fp call (__trunctfdf2, __addtf3, ...).
+# x86_64's 80-bit long double is native x87 and needs nothing extra.
+ifeq ($(ARCH),arm64)
+COMMON_OBJS += $(shell $(CROSS_COMPILE)gcc -print-libgcc-file-name)
+endif
+
 COMMON_DEPS :=

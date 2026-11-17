@@ -28,6 +28,24 @@ void wm_canvas_stroke_rounded(wm_canvas_t *canvas, wm_rect_t rect,
 /* A soft drop shadow `spread` px wide under `rect` (see WM_SHADOW_*). */
 void wm_canvas_shadow(wm_canvas_t *canvas, wm_rect_t rect, uint32_t radius,
                       uint32_t spread, uint32_t shadow_color, uint8_t opacity);
+/* wm_canvas_shadow() for a shape about to be painted opaquely over
+ * `rect` with the same `radius`: the part of the ramp it would hide is
+ * skipped. Same pixels on screen, a fraction of the blending. */
+void wm_canvas_shadow_behind_opaque(wm_canvas_t *canvas, wm_rect_t rect,
+                                    uint32_t radius, uint32_t spread,
+                                    uint32_t shadow_color, uint8_t opacity);
+
+/* A rounded `rect` in `border` with a 1px-inset rounded fill over it --
+ * what a popup surface is -- without painting the border colour under the
+ * whole fill first (when both colours are opaque). */
+void wm_canvas_fill_bordered(wm_canvas_t *canvas, wm_rect_t rect,
+                             uint32_t radius, uint32_t border, uint32_t fill);
+/* A popup's surface: its shadow, a 1px `border` and the `fill` inside.
+ * When both colours are opaque, the shadow under the surface is skipped. */
+void wm_canvas_popup_surface(wm_canvas_t *canvas, wm_rect_t rect,
+                             uint32_t radius, uint32_t spread,
+                             uint32_t shadow_color, uint8_t opacity,
+                             uint32_t border, uint32_t fill);
 void wm_canvas_line(wm_canvas_t *canvas, int32_t x0, int32_t y0,
                     int32_t x1, int32_t y1, uint32_t color);
 void wm_canvas_blit(wm_canvas_t *canvas, wm_rect_t destination,

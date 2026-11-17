@@ -86,6 +86,12 @@ static wm_rect_t list_row_rect(wm_rect_t list, const wm_scroll_t *scroll,
     return (wm_rect_t){list.x, y, list.w, WIFI_ROW_H - 6u};
 }
 
+wm_rect_t wm_wifi_panel_list_rect(const wm_state_t *state)
+{
+    if (!state) return (wm_rect_t){0, 0, 0u, 0u};
+    return list_start(body_rect(wm_wifi_panel_rect(state)), state);
+}
+
 static float max_list_scroll(const wm_state_t *state)
 {
     const wm_wifi_panel_t *p = &state->wifi_panel;
@@ -174,9 +180,9 @@ static void draw_header(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t panel)
     bool connected = is_connected(state);
 
     wm_rect_t badge = {panel.x + 20, panel.y + 18, 40u, 40u};
-    wm_canvas_fill_rounded(canvas, badge,
-        wm_pill_radius(badge.w, badge.h),
-        connected ? th->accent_soft : th->surface);
+    if (connected)    /* otherwise it is the panel's own surface colour */
+        wm_canvas_fill_rounded(canvas, badge,
+            wm_pill_radius(badge.w, badge.h), th->accent_soft);
     wm_icon_draw(canvas, (wm_rect_t){badge.x + 10, badge.y + 10, 20u, 20u},
                  connected ? WM_ICON_WIFI : WM_ICON_WIFI_OFF,
                  connected ? th->text : th->text_dim);
@@ -195,9 +201,9 @@ static void draw_header(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t panel)
      * active indicator rather than changing its glyph. */
     wm_rect_t scan_btn = scan_button_rect(panel);
     bool scanning = state->wifi_panel.scan_active;
-    wm_canvas_fill_rounded(canvas, scan_btn,
-        wm_pill_radius(scan_btn.w, scan_btn.h),
-        scanning ? th->accent_soft : th->surface);
+    if (scanning)
+        wm_canvas_fill_rounded(canvas, scan_btn,
+            wm_pill_radius(scan_btn.w, scan_btn.h), th->accent_soft);
     wm_icon_draw(canvas,
         (wm_rect_t){scan_btn.x + 10, scan_btn.y + 10, 20u, 20u},
         WM_ICON_SEARCH,
@@ -249,19 +255,22 @@ static void draw_list(wm_state_t *state, wm_canvas_t *canvas, wm_rect_t body)
         wm_font_draw(&state->font, canvas, list.x + 8, list.y + 20,
                      msg, th->text_dim, THEME_FONT_BODY,
                      list.w > 16u ? list.w - 16u : 0u);
-    } else {
-        for (uint32_t i = 0u; i < p->result_count; ++i) {
+    } else if (canvas->clip.w != 0u && canvas->clip.h != 0u) {
+        /* Rows are a fixed pitch: start at the first one on screen. */
+        uint32_t first = (uint32_t)wm_scroll_offset(&p->scroll) / WIFI_ROW_H;
+        for (uint32_t i = first; i < p->result_count; ++i) {
             wm_rect_t row = list_row_rect(list, &p->scroll, i);
-            if (!wm_rect_intersects(row, list)) continue;
+            if (row.y >= list.y + (int32_t)list.h) break;
+            if (!wm_rect_intersects(row, canvas->clip)) continue;
             const wifi_scan_result_t *r = &p->results[i];
             bool is_current = is_connected(state) &&
                 strncmp(r->ssid, p->status.ssid, sizeof(r->ssid)) == 0;
-            uint32_t container = is_current ? th->accent_soft
-                                            : th->surface;
-            uint32_t on_container = is_current ? th->text
-                                               : th->text;
-            wm_canvas_fill_rounded(canvas, row,
-                wm_pill_radius(row.w, row.h), container);
+            uint32_t on_container = th->text;
+            /* Only the current network has a container of its own; the
+             * others sit on the panel's surface. */
+            if (is_current)
+                wm_canvas_fill_rounded(canvas, row,
+                    wm_pill_radius(row.w, row.h), th->accent_soft);
             draw_signal_bars(canvas, row.x + 16, row.y + (int32_t)row.h / 2 + 5,
                              r->rssi_dbm, on_container, th->border);
             wm_font_draw(&state->font, canvas, row.x + 48,
@@ -371,12 +380,9 @@ static void draw_panel(wm_state_t *state, wm_canvas_t *canvas)
     uint32_t radius = THEME_RADIUS_LARGE;
     uint32_t container = th->surface;
 
-    wm_canvas_shadow(canvas, panel, radius, WM_SHADOW_POPUP,
-                               color_alpha(0xFF000000u, 22u), 255u);
-    wm_canvas_fill_rounded(canvas, panel, radius, th->border);
-    wm_canvas_fill_rounded(canvas,
-        (wm_rect_t){panel.x + 1, panel.y + 1, panel.w - 2u, panel.h - 2u},
-        radius > 0u ? radius - 1u : 0u, container);
+    wm_canvas_popup_surface(canvas, panel, radius, WM_SHADOW_POPUP,
+                            color_alpha(0xFF000000u, 22u), 255u,
+                            th->border, container);
 
     draw_header(state, canvas, panel);
 

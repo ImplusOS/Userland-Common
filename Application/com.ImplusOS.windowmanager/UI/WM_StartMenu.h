@@ -16,6 +16,11 @@ typedef struct {
 
 wm_rect_t wm_start_menu_rect(const wm_state_t *state);
 void wm_start_menu_draw(wm_state_t *state, wm_canvas_t *canvas);
+/* The scrolling app list (scroll bar included): all a scroll repaints. */
+wm_rect_t wm_start_menu_list_rect(const wm_state_t *state);
+/* The on-screen part of `app_index`'s row, for repainting just that row
+ * when its highlight changes. False when the app has no row in view. */
+bool wm_start_menu_app_rect(wm_state_t *state, int32_t app_index, wm_rect_t *out);
 wm_launcher_action_t wm_start_menu_hit_test(wm_state_t *state, int32_t x, int32_t y);
 /* Glide the app list by `delta_px` (positive = further down the list), or
  * by whole viewports. True if the scroll target moved. */

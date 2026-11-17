@@ -173,11 +173,32 @@ static void fill_shape(wm_canvas_t *canvas, wm_rect_t rect,
             wm_canvas_fill(canvas, (wm_rect_t){visible.x, py, visible.w, 1u}, color);
             continue;
         }
-        for (uint32_t col = 0u; col < visible.w; ++col) {
-            int32_t px = visible.x + (int32_t)col;
-            uint32_t local_x = (uint32_t)(px - rect.x);
-            uint8_t coverage = rounded_pixel_coverage(local_x, local_y,
-                                                      rect.w, rect.h, corners);
+        /* A corner row: only the arcs at either end need coverage; the run
+         * between them is solid and goes down as one span. */
+        bool top = local_y < rect.h / 2u;
+        uint32_t left_r = wm_min_u32(corner_radius_at(corners, true, top), limit);
+        uint32_t right_r = wm_min_u32(corner_radius_at(corners, false, top), limit);
+        int32_t vx0 = visible.x;
+        int32_t vx1 = visible.x + (int32_t)visible.w;
+        int32_t mid0 = rect.x + (int32_t)left_r;
+        int32_t mid1 = rect.x + (int32_t)(rect.w - right_r);
+        int32_t left_end = mid0 < vx1 ? mid0 : vx1;
+        for (int32_t px = vx0; px < left_end; ++px) {
+            uint8_t coverage = rounded_pixel_coverage((uint32_t)(px - rect.x),
+                                                      local_y, rect.w, rect.h,
+                                                      corners);
+            wm_canvas_put_coverage(canvas, px, py, color, coverage);
+        }
+        int32_t a = mid0 > vx0 ? mid0 : vx0;
+        int32_t b = mid1 < vx1 ? mid1 : vx1;
+        if (b > a)
+            wm_canvas_fill(canvas, (wm_rect_t){a, py, (uint32_t)(b - a), 1u}, color);
+        int32_t right_start = mid1 > vx0 ? mid1 : vx0;
+        if (right_start < left_end) right_start = left_end;
+        for (int32_t px = right_start; px < vx1; ++px) {
+            uint8_t coverage = rounded_pixel_coverage((uint32_t)(px - rect.x),
+                                                      local_y, rect.w, rect.h,
+                                                      corners);
             wm_canvas_put_coverage(canvas, px, py, color, coverage);
         }
     }
@@ -222,10 +243,31 @@ void wm_canvas_stroke_rounded(wm_canvas_t *canvas, wm_rect_t rect,
     wm_corners_t inner_corners = {inner_radius, inner_radius,
                                   inner_radius, inner_radius};
 
+    /* Away from the corners a row is either all ring (above / below the
+     * hole) or ring only at its two ends; those runs are known without
+     * sampling, so only the corner arcs are computed pixel by pixel. */
+    uint32_t outer_r = wm_min_u32(radius, wm_min_u32(rect.w / 2u, rect.h / 2u));
+    uint32_t hole_r = wm_min_u32(inner_radius,
+                                 wm_min_u32(inner.w / 2u, inner.h / 2u));
+    int32_t vx1 = visible.x + (int32_t)visible.w;
     for (uint32_t row = 0u; row < visible.h; ++row) {
         int32_t py = visible.y + (int32_t)row;
-        for (uint32_t col = 0u; col < visible.w; ++col) {
-            int32_t px = visible.x + (int32_t)col;
+        bool in_hole_rows = py >= inner.y && py < inner.y + (int32_t)inner.h;
+        int32_t skip0, skip1;      /* a run settled without sampling */
+        if (in_hole_rows) {
+            skip0 = inner.x + (int32_t)hole_r;
+            skip1 = inner.x + (int32_t)(inner.w - hole_r);
+        } else {
+            skip0 = rect.x + (int32_t)outer_r;
+            skip1 = rect.x + (int32_t)(rect.w - outer_r);
+            int32_t a = skip0 > visible.x ? skip0 : visible.x;
+            int32_t b = skip1 < vx1 ? skip1 : vx1;
+            if (b > a)
+                wm_canvas_fill(canvas, (wm_rect_t){a, py, (uint32_t)(b - a), 1u},
+                               color);
+        }
+        for (int32_t px = visible.x; px < vx1; ++px) {
+            if (px >= skip0 && px < skip1) { px = skip1 - 1; continue; }
             uint8_t outer = rounded_pixel_coverage((uint32_t)(px - rect.x),
                                                    (uint32_t)(py - rect.y),
                                                    rect.w, rect.h,
@@ -267,6 +309,102 @@ void wm_canvas_shadow(wm_canvas_t *canvas, wm_rect_t rect, uint32_t radius,
         wm_canvas_fill_rounded(canvas, halo, radius + layer,
             (shadow_color & 0x00FFFFFFu) | ((strength & 0xFFu) << 24u));
     }
+}
+
+/* [x0, x1) x [y0, y1) as a rect, empty when inverted. */
+static wm_rect_t span_rect(int64_t x0, int64_t y0, int64_t x1, int64_t y1)
+{
+    if (x1 <= x0 || y1 <= y0) return (wm_rect_t){0, 0, 0u, 0u};
+    return (wm_rect_t){(int32_t)x0, (int32_t)y0,
+                       (uint32_t)(x1 - x0), (uint32_t)(y1 - y0)};
+}
+
+void wm_canvas_shadow_behind_opaque(wm_canvas_t *canvas, wm_rect_t rect,
+                                    uint32_t radius, uint32_t spread,
+                                    uint32_t shadow_color, uint8_t opacity)
+{
+    if (!canvas || spread == 0u || opacity == 0u) return;
+    if (rect.w == 0u || rect.h == 0u) {
+        wm_canvas_shadow(canvas, rect, radius, spread, shadow_color, opacity);
+        return;
+    }
+    /* The shape about to be painted over `rect` hides the shadow under
+     * its rows clear of the corners (full width) and under its columns
+     * clear of the corners (full height). Paint every layer of the ramp
+     * only around that cross: five bands, the corner squares kept. */
+    uint32_t r = wm_min_u32(radius, wm_min_u32(rect.w / 2u, rect.h / 2u));
+    wm_rect_t old = canvas->clip;
+    if (old.w == 0u || old.h == 0u) return;
+    int64_t cx0 = old.x, cy0 = old.y;
+    int64_t cx1 = (int64_t)old.x + old.w, cy1 = (int64_t)old.y + old.h;
+    int64_t x0 = rect.x, y0 = rect.y;
+    int64_t x1 = (int64_t)rect.x + rect.w, y1 = (int64_t)rect.y + rect.h;
+    int64_t ri = (int64_t)r;
+    wm_rect_t bands[8] = {
+        span_rect(cx0, cy0, cx1, y0),                       /* above */
+        span_rect(cx0, y0, x0 + ri, y0 + ri),               /* top corners */
+        span_rect(x1 - ri, y0, cx1, y0 + ri),
+        span_rect(cx0, y0 + ri, x0, y1 - ri),               /* beside */
+        span_rect(x1, y0 + ri, cx1, y1 - ri),
+        span_rect(cx0, y1 - ri, x0 + ri, y1),               /* bottom corners */
+        span_rect(x1 - ri, y1 - ri, cx1, y1),
+        span_rect(cx0, y1, cx1, cy1),                       /* below */
+    };
+    for (uint32_t i = 0u; i < 8u; ++i) {
+        wm_rect_t band = wm_rect_intersection(bands[i], old);
+        if (band.w == 0u || band.h == 0u) continue;
+        canvas->clip = band;
+        wm_canvas_shadow(canvas, rect, radius, spread, shadow_color, opacity);
+    }
+    canvas->clip = old;
+}
+
+void wm_canvas_fill_bordered(wm_canvas_t *canvas, wm_rect_t rect,
+                             uint32_t radius, uint32_t border, uint32_t fill)
+{
+    if (!canvas || rect.w == 0u || rect.h == 0u) return;
+    wm_rect_t inner = {rect.x + 1, rect.y + 1,
+                       rect.w > 2u ? rect.w - 2u : 0u,
+                       rect.h > 2u ? rect.h - 2u : 0u};
+    uint32_t inner_radius = radius > 0u ? radius - 1u : 0u;
+    uint32_t r = wm_min_u32(radius, wm_min_u32(rect.w / 2u, rect.h / 2u));
+    uint32_t band = r + 1u;
+    /* Only an opaque fill hides the border shape under it; anything else
+     * keeps the plain paint-then-cover order. */
+    if ((fill >> 24u) != 255u || (border >> 24u) != 255u ||
+        inner.w == 0u || inner.h == 0u || band * 2u >= rect.h) {
+        wm_canvas_fill_rounded(canvas, rect, radius, border);
+        wm_canvas_fill_rounded(canvas, inner, inner_radius, fill);
+        return;
+    }
+    /* The border shape only shows in the corner bands at the top and the
+     * bottom and in the 1px columns between them. */
+    wm_rect_t old = canvas->clip;
+    canvas->clip = wm_rect_intersection(old, (wm_rect_t){rect.x, rect.y, rect.w, band});
+    wm_canvas_fill_rounded(canvas, rect, radius, border);
+    canvas->clip = wm_rect_intersection(old,
+        (wm_rect_t){rect.x, rect.y + (int32_t)(rect.h - band), rect.w, band});
+    wm_canvas_fill_rounded(canvas, rect, radius, border);
+    canvas->clip = old;
+    uint32_t mid_h = rect.h - band * 2u;
+    wm_canvas_fill(canvas, (wm_rect_t){rect.x, rect.y + (int32_t)band, 1u, mid_h}, border);
+    wm_canvas_fill(canvas, (wm_rect_t){rect.x + (int32_t)rect.w - 1,
+                                       rect.y + (int32_t)band, 1u, mid_h}, border);
+    wm_canvas_fill_rounded(canvas, inner, inner_radius, fill);
+}
+
+void wm_canvas_popup_surface(wm_canvas_t *canvas, wm_rect_t rect,
+                             uint32_t radius, uint32_t spread,
+                             uint32_t shadow_color, uint8_t opacity,
+                             uint32_t border, uint32_t fill)
+{
+    if (!canvas || rect.w == 0u || rect.h == 0u) return;
+    if ((fill >> 24u) == 255u && (border >> 24u) == 255u)
+        wm_canvas_shadow_behind_opaque(canvas, rect, radius, spread,
+                                       shadow_color, opacity);
+    else
+        wm_canvas_shadow(canvas, rect, radius, spread, shadow_color, opacity);
+    wm_canvas_fill_bordered(canvas, rect, radius, border, fill);
 }
 
 void wm_canvas_line(wm_canvas_t *canvas, int32_t x0, int32_t y0,

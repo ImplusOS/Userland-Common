@@ -183,6 +183,12 @@ static wm_rect_t center_list_rect(wm_rect_t panel)
                        panel.h > 96u ? panel.h - 96u : 0u};
 }
 
+wm_rect_t wm_notification_center_list_rect(const wm_state_t *state)
+{
+    if (!state) return (wm_rect_t){0, 0, 0u, 0u};
+    return center_list_rect(wm_notification_center_rect(state));
+}
+
 static float max_center_scroll(const wm_state_t *state)
 {
     if (!state) return 0.0f;
@@ -224,13 +230,14 @@ static void draw_notification_card(wm_state_t *state, wm_canvas_t *canvas,
     uint32_t radius = THEME_RADIUS_LARGE;
     uint32_t container = th->surface;
 
-    wm_canvas_shadow(canvas, card, radius, WM_SHADOW_CARD,
-                               color_alpha(0xFF000000u, 22u), opacity);
-    wm_canvas_fill_rounded(canvas, card, radius,
-        apply_opacity(th->border, opacity));
-    wm_canvas_fill_rounded(canvas,
-        (wm_rect_t){card.x + 1, card.y + 1, card.w - 2u, card.h - 2u},
-        radius > 0u ? radius - 1u : 0u, apply_opacity(container, opacity));
+    wm_rect_t halo = {card.x - 12, card.y - 6, card.w + 24u, card.h + 24u};
+    if (!wm_rect_intersects(halo, canvas->clip)) return;
+    /* Mid-fade the card is translucent and its whole shadow shows
+     * through; wm_canvas_popup_surface() tells the two apart. */
+    wm_canvas_popup_surface(canvas, card, radius, WM_SHADOW_CARD,
+                            color_alpha(0xFF000000u, 22u), opacity,
+                            apply_opacity(th->border, opacity),
+                            apply_opacity(container, opacity));
 
     wm_rect_t badge = {card.x + 16, card.y + (int32_t)(card.h - 36u) / 2 - 4,
                        36u, 36u};
@@ -320,12 +327,9 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
     uint32_t radius = THEME_RADIUS_LARGE;
     uint32_t container = th->surface;
 
-    wm_canvas_shadow(canvas, panel, radius, WM_SHADOW_POPUP,
-                               color_alpha(0xFF000000u, 22u), 255u);
-    wm_canvas_fill_rounded(canvas, panel, radius, th->border);
-    wm_canvas_fill_rounded(canvas,
-        (wm_rect_t){panel.x + 1, panel.y + 1, panel.w - 2u, panel.h - 2u},
-        radius > 0u ? radius - 1u : 0u, container);
+    wm_canvas_popup_surface(canvas, panel, radius, WM_SHADOW_POPUP,
+                            color_alpha(0xFF000000u, 22u), 255u,
+                            th->border, container);
 
     wm_rect_t badge = {panel.x + 20, panel.y + 18, 40u, 40u};
     wm_canvas_fill_rounded(canvas, badge,
@@ -361,7 +365,7 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
                      list.x + ((int32_t)list.w - (int32_t)empty_w) / 2,
                      list.y + 76, empty, th->text_dim,
                      THEME_FONT_BODY, list.w);
-    } else {
+    } else if (canvas->clip.w != 0u && canvas->clip.h != 0u) {
         int32_t y = list.y - wm_scroll_offset(&state->notification_center_scroll);
         for (uint32_t display = 0u; display < state->notification_history_count; ++display) {
             uint32_t idx = history_index_for(state, display);
@@ -369,10 +373,9 @@ static void draw_center(wm_state_t *state, wm_canvas_t *canvas)
             wm_notification_history_t *item = &state->notification_history[idx];
             if (!item->valid) continue;
             wm_rect_t card = {list.x, y, list.w, CENTER_CARD_H};
-            if (wm_rect_intersects(card, list)) {
-                wm_canvas_fill_rounded(canvas, card,
-                    THEME_RADIUS,
-                    th->surface);
+            /* Cards share the panel's surface colour, so a card is just
+             * its content -- no container to fill. */
+            if (wm_rect_intersects(card, canvas->clip)) {
                 wm_rect_t dot = {card.x + 12, card.y + (int32_t)(card.h - 32u) / 2,
                                  32u, 32u};
                 wm_canvas_fill_rounded(canvas, dot,

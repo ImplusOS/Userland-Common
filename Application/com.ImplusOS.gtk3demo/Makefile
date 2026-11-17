@@ -13,11 +13,16 @@ include ../../Source/AppCommon.mk
 
 OBJS := $(APP_OBJS) $(COMMON_OBJS)
 
+# -iquote: on a case-insensitive filesystem (macOS APFS default) the
+# `#include "Socket.h"` in Start.c would otherwise resolve to libc's
+# include/sys/socket.h, which comes earlier in the -I list.
+
 CFLAGS := -ffreestanding -fno-stack-protector -fno-pic -fno-builtin \
           $(ARCH_CFLAGS) -nostdlib -nostartfiles -nodefaultlibs \
           -I../../../libc/I_libc/Source/include -I../../../libc/I_libc/Source/include/sys \
           -I../../Source \
           -I../../API/Source \
+          -iquote ../../API/Source \
           -Wall -Wextra -Wtype-limits -Wconversion -Wsign-conversion -Wshadow -MMD -MP
 LDFLAGS := -T ../../Source/Userland.ld -e _start -nostdlib --build-id=none
 

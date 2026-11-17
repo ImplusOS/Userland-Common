@@ -198,8 +198,9 @@ bool wm_scroll_step(wm_scroll_t *scroll, uint64_t now_ms)
     return true;
 }
 
-/* Glide one panel's list. The whole panel is repainted while it moves:
- * the scroll bar thumb lives outside the list's own rectangle. */
+/* Glide one panel's list. Only the list is repainted while it moves --
+ * the header, search bar and footer around it stay put (the Start menu's
+ * scroll bar is drawn inside its list rectangle). */
 static bool tick_scroll(wm_state_t *state, wm_scroll_t *scroll, bool visible,
                         panel_rect_fn rect_of, uint64_t now_ms)
 {
@@ -234,7 +235,7 @@ bool wm_panel_animation_tick(wm_state_t *state, uint64_t now_ms)
     int32_t launcher_before = wm_scroll_offset(&state->launcher_scroll);
     bool d = tick_scroll(state, &state->launcher_scroll,
         wm_panel_visible(&state->launcher_anim, state->launcher_open),
-        wm_start_menu_rect, now_ms);
+        wm_start_menu_list_rect, now_ms);
     /* The list moved under a pointer that did not: what it points at
      * changed, so the hover highlight has to follow. Not when the keyboard
      * has the highlight (hover < 0): that scroll is the selection being
@@ -249,9 +250,9 @@ bool wm_panel_animation_tick(wm_state_t *state, uint64_t now_ms)
     bool e = tick_scroll(state, &state->notification_center_scroll,
         wm_panel_visible(&state->notification_anim,
                          state->notification_center_open),
-        wm_notification_center_rect, now_ms);
+        wm_notification_center_list_rect, now_ms);
     bool f = tick_scroll(state, &state->wifi_panel.scroll,
         wm_panel_visible(&state->wifi_anim, state->wifi_panel.open),
-        wm_wifi_panel_rect, now_ms);
+        wm_wifi_panel_list_rect, now_ms);
     return a || b || c || d || e || f;
 }

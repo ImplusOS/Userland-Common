@@ -322,7 +322,10 @@ static void draw_menu(wm_state_t *state, wm_canvas_t *canvas)
         !wm_panel_visible(&state->launcher_anim, state->launcher_open)) return;
     wm_rect_t menu = wm_start_menu_rect(state);
     if (menu.w == 0u || menu.h == 0u) return;
-    if (!wm_rect_intersects(menu, canvas->clip)) return;
+    /* The shadow reaches past the menu, so a damage rectangle that only
+     * touches the shadow still has to repaint it. */
+    wm_rect_t halo = {menu.x - 12, menu.y - 6, menu.w + 24u, menu.h + 24u};
+    if (!wm_rect_intersects(halo, canvas->clip)) return;
     ensure_filter_cache(state);
     wm_start_menu_clamp_scroll(state);
 
@@ -330,12 +333,9 @@ static void draw_menu(wm_state_t *state, wm_canvas_t *canvas)
     uint32_t radius = THEME_RADIUS_LARGE;
     uint32_t container = th->surface;
 
-    wm_canvas_shadow(canvas, menu, radius, WM_SHADOW_POPUP,
-                               color_alpha(0xFF000000u, 22u), 255u);
-    wm_canvas_fill_rounded(canvas, menu, radius, th->border);
-    wm_canvas_fill_rounded(canvas,
-        (wm_rect_t){menu.x + 1, menu.y + 1, menu.w - 2u, menu.h - 2u},
-        radius > 0u ? radius - 1u : 0u, container);
+    wm_canvas_popup_surface(canvas, menu, radius, WM_SHADOW_POPUP,
+                            color_alpha(0xFF000000u, 22u), 255u,
+                            th->border, container);
 
     uint32_t sep_y = sm_header_height();
 
@@ -345,7 +345,7 @@ static void draw_menu(wm_state_t *state, wm_canvas_t *canvas)
         int32_t sb_y = menu.y + (int32_t)sep_y + (int32_t)SM_SEARCH_GAP;
         wm_rect_t sb = {menu.x + 12, sb_y, menu.w - 24u, SM_SEARCH_H};
         uint32_t sb_radius = wm_pill_radius(sb.w, sb.h);
-        wm_canvas_fill_rounded(canvas, sb, sb_radius, th->surface);
+        /* The bar's container is the menu's own surface: nothing to fill. */
         if (state->search_active)
             wm_canvas_stroke_rounded(canvas, sb, sb_radius, 2u, th->accent);
         uint32_t isz = 20u;
@@ -392,6 +392,7 @@ static void draw_menu(wm_state_t *state, wm_canvas_t *canvas)
         wm_rect_t vp = app_viewport_rect(state);
         wm_rect_t old_clip = canvas->clip;
         wm_canvas_set_clip(canvas, wm_rect_intersection(old_clip, vp));
+        if (canvas->clip.w == 0u || canvas->clip.h == 0u) goto list_done;
 
         uint32_t total = state->filter_count;
         uint32_t first_row, last_row;
@@ -508,6 +509,7 @@ static void draw_menu(wm_state_t *state, wm_canvas_t *canvas)
                 (wm_rect_t){track.x, track.y + (int32_t)thumb_y, 4u, thumb_h},
                 2u, th->text_dim);
         }
+list_done:
         canvas->clip = old_clip;
     }
 
@@ -541,7 +543,7 @@ static void draw_menu(wm_state_t *state, wm_canvas_t *canvas)
         wm_rect_t rb = sm_session_button_rect(menu, false);
         wm_rect_t sd = sm_session_button_rect(menu, true);
         uint32_t btn_radius = wm_pill_radius(sd.w, sd.h);
-        wm_canvas_fill_rounded(canvas, rb, btn_radius, th->surface);
+        /* The restart button sits on the footer's own surface colour. */
         wm_canvas_fill_rounded(canvas, sd, btn_radius, th->danger);
         wm_icon_draw(canvas, (wm_rect_t){rb.x + 10, rb.y + 10, 20u, 20u},
                      WM_ICON_RESTART, th->text_dim);
@@ -581,6 +583,27 @@ wm_launcher_action_t wm_start_menu_hit_test(wm_state_t *state, int32_t x, int32_
         }
     }
     return result;
+}
+
+wm_rect_t wm_start_menu_list_rect(const wm_state_t *state)
+{
+    if (!state) return (wm_rect_t){0, 0, 0u, 0u};
+    return app_viewport_rect(state);
+}
+
+static int32_t row_of_app(const wm_state_t *state, int32_t app_index);
+
+bool wm_start_menu_app_rect(wm_state_t *state, int32_t app_index, wm_rect_t *out)
+{
+    if (!state || !out || app_index < 0) return false;
+    ensure_filter_cache(state);
+    int32_t row = row_of_app(state, app_index);
+    if (row < 0) return false;
+    wm_rect_t r = wm_rect_intersection(card_rect(state, (uint32_t)row),
+                                       app_viewport_rect(state));
+    if (r.w == 0u || r.h == 0u) return false;
+    *out = r;
+    return true;
 }
 
 /* ------------------------------------------------- keyboard navigation ---*/

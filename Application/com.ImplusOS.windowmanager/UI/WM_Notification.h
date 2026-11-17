@@ -9,6 +9,8 @@ wm_rect_t wm_notification_center_rect(const wm_state_t *state);
 void wm_notification_toggle_center(wm_state_t *state);
 void wm_notification_close_center(wm_state_t *state);
 bool wm_notification_center_contains(const wm_state_t *state, int32_t x, int32_t y);
+/* The center's scrolling history list: all a scroll repaints. */
+wm_rect_t wm_notification_center_list_rect(const wm_state_t *state);
 /* Glide the history list by `delta_px` (positive = toward older entries).
  * True if the scroll target moved. */
 bool wm_notification_center_scroll(wm_state_t *state, int32_t delta_px);
