@@ -20,12 +20,13 @@
  * server instead of starting a second one on the same display.
  *
  * Environment variables are data, not code: Environment/linuxxdoom-x86_64.env
- * beside this file names the IWAD/soundfont and the null audio backends, and
- * xsession_run() loads it as the program profile of DOOM_PATH, together with
- * the x11-client role profile (DISPLAY, XKB_CONFIG_ROOT, Mesa: virgl when the
- * kernel exposes a 3D render node, llvmpipe otherwise). See
- * Userland/API/Source/LinuxEnv.h. The kernel only supplies the generic
- * defaults (PATH, HOME, locale, XDG_*).
+ * beside this file names the IWAD/soundfont and the null audio backends and
+ * keeps Doom's GL on llvmpipe even when there is a 3D render node (virgl's
+ * GL version is the host's call, and Doom's #version 330 shaders do not
+ * compile on an OpenGL ES host). xsession_run() loads it as the program
+ * profile of DOOM_PATH, together with the x11-client role profile (DISPLAY,
+ * XKB_CONFIG_ROOT). See Userland/API/Source/LinuxEnv.h. The kernel only
+ * supplies the generic defaults (PATH, HOME, locale, XDG_*).
  */
 
 #define DOOM_PATH "/Userland/Doom/Resource/linuxxdoom-x86_64"
