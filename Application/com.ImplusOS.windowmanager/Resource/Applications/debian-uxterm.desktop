@@ -1,0 +1,21 @@
+# Overrides the entry the xterm package installs at
+# /usr/share/applications/debian-uxterm.desktop (resolved by file ID, this
+# directory first -- see debian-xterm.desktop next to it).
+#
+# The packaged Exec=uxterm names a shell script the image does not ship, and
+# could not run as is: the host launcher spawns ELF files, and the script
+# wants locale/sed/awk besides. All it ends up doing when the locale is
+# already UTF-8 -- and the kernel's default LANG/LC_ALL are C.UTF-8 -- is
+#     exec xterm -class UXTerm -u8 "$@"
+# so this entry runs that directly, with the same extra switches as XTerm's
+# (see debian-xterm.desktop for what each one is for).
+[Desktop Entry]
+Type=Application
+Name=UXTerm
+Comment=xterm wrapper for Unicode environments
+Comment[ja]=UTF-8 モードの xterm（Debian 版そのまま）
+Exec=/usr/bin/xterm -class UXTerm -title uxterm -u8 -fn fixed -bg black -fg white +sb -ut -geometry 80x24 -e /bin/sh /bin/imsession
+Icon=xterm
+Categories=Utility;TerminalEmulator;
+X-ImplusOS-Linux=true
+X-ImplusOS-Geometry=800x480

@@ -164,17 +164,34 @@ long xl_sys_clone(gthread_t *t, uint64_t flags, uint64_t newsp, uint64_t ptid,
         return r;
     }
 
-    /* fork, or vfork run as one */
+    /* fork, or vfork run as one.
+     *
+     * Only the calling thread exists in the child, so a translator lock that
+     * another thread holds at the moment of the fork would stay held there
+     * forever, and the child would spin on it at its first mmap or signal
+     * (the code-range lock is taken on every mapping change). Take every
+     * lock first, the way pthread_atfork handlers do, and let go of them on
+     * both sides once the fork is done -- the child then also inherits the
+     * tables they protect in a consistent state. */
+    xl_signal_fork_locks(1);
+    xl_code_fork_locks(1);
+    guest_fork_locks(1);
+    xl_lock(&g_free_lock);
     uint64_t hflags = flags & ~(CLONE_SETTLS | CLONE_VM | CLONE_VFORK);
     uint64_t a[6] = { hflags, 0, ptid, ctid, 0, 0 };
     long r = xl_host_syscall_plain(56 /* clone */, a);
     if (r == 0) {
         t->tid = (int32_t)host_gettid();
-        guest_clone_child(t, newsp, settls, tls);
-        xl_signal_after_fork_child(t);
         /* Only this thread exists in the child. */
         g_free_threads = NULL;
-        g_free_lock.v = 0;
+    }
+    xl_unlock(&g_free_lock);
+    guest_fork_locks(0);
+    xl_code_fork_locks(0);
+    xl_signal_fork_locks(0);
+    if (r == 0) {
+        guest_clone_child(t, newsp, settls, tls);
+        xl_signal_after_fork_child(t);
     }
     return r;
 }

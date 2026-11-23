@@ -20,7 +20,7 @@ enum {
     C_shmdt = 67, C_rt_sigaction = 13, C_rt_sigprocmask = 14,
     C_rt_sigreturn = 15, C_poll = 7, C_select = 23, C_pause = 34,
     C_nanosleep = 35, C_clone = 56, C_fork = 57, C_vfork = 58, C_execve = 59,
-    C_exit = 60, C_uname = 63, C_readlink = 89, C_ptrace = 101,
+    C_exit = 60, C_uname = 63, C_readlink = 89, C_ptrace = 101, C_openat = 257,
     C_rt_sigtimedwait = 128, C_rt_sigsuspend = 130, C_sigaltstack = 131,
     C_modify_ldt = 154, C_prctl = 157, C_arch_prctl = 158, C_iopl = 172,
     C_ioperm = 173, C_set_thread_area = 205, C_io_getevents = 208,
@@ -66,6 +66,12 @@ static struct { uint64_t start, end; } g_ro_code[CODE_RANGES_MAX];
 static int g_ro_n;
 static xl_lock_t g_ro_lock;
 volatile uint64_t g_xl_code_epoch = 1;
+
+void xl_code_fork_locks(int acquire)
+{
+    if (acquire) xl_lock(&g_ro_lock);
+    else xl_unlock(&g_ro_lock);
+}
 
 /* invalidation log (xl.h) */
 #define INVAL_LOG 256u
@@ -236,6 +242,116 @@ static bool is_proc_self_exe(uint64_t p)
     return strcmp(s, own) == 0;
 }
 
+/* /proc/self/maps, /proc/thread-self/maps or /proc/<own pid>/maps. */
+static bool is_proc_self_maps(uint64_t p)
+{
+    const char *s = (const char *)(uintptr_t)p;
+    if (s == NULL || strncmp(s, "/proc/", 6) != 0) {
+        return false;
+    }
+    if (strcmp(s, "/proc/self/maps") == 0 ||
+        strcmp(s, "/proc/thread-self/maps") == 0) {
+        return true;
+    }
+    char own[32];
+    xl_snprintf(own, sizeof(own), "/proc/%d/maps", (int)host_getpid());
+    return strcmp(s, own) == 0;
+}
+
+static uint64_t maps_line_start(const char *line)
+{
+    uint64_t v = 0;
+    for (; *line != '\0' && *line != '-'; ++line) {
+        char c = *line;
+        uint64_t d = (c >= '0' && c <= '9') ? (uint64_t)(c - '0') :
+                     (c >= 'a' && c <= 'f') ? (uint64_t)(c - 'a' + 10) :
+                     (c >= 'A' && c <= 'F') ? (uint64_t)(c - 'A' + 10) : 16u;
+        if (d > 15u) break;
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
+/*
+ * The host kernel's maps file lists the regions it lays out for a process
+ * itself -- for this translator its own code, heap and stack -- but not the
+ * guest stack build_stack() mmaps. glibc's pthread_getattr_np() finds the
+ * main thread's stack by looking for the line that holds __libc_stack_end
+ * and fails when there is none, and Firefox's JS engine then dies on a
+ * MOZ_RELEASE_ASSERT for the missing stack base before it opens a window.
+ * So the guest reads the host's lines with its own stack added (in address
+ * order, which glibc relies on for the size), from a memfd. The host
+ * stack's "[stack]" name goes to the guest's, the one it is asking about.
+ */
+static long open_proc_maps(void)
+{
+    static char in[16384];
+    static char out[16384 + 256];
+    long fd = host_openat(HOST_AT_FDCWD, "/proc/self/maps",
+                          HOST_O_RDONLY | HOST_O_CLOEXEC, 0);
+    if (fd < 0) {
+        return fd;
+    }
+    size_t n = 0;
+    for (;;) {
+        long r = host_read((int)fd, in + n, sizeof(in) - 1u - n);
+        if (r <= 0) break;
+        n += (size_t)r;
+        if (n >= sizeof(in) - 1u) break;
+    }
+    (void)host_close((int)fd);
+    in[n] = '\0';
+
+    char guest[96];
+    int glen = 0;
+    if (g_xl_guest_stack_hi > g_xl_guest_stack_lo) {
+        glen = xl_snprintf(guest, sizeof(guest),
+                           "%016lx-%016lx rw-p 00000000 00:00 0 [stack]\n",
+                           (unsigned long)g_xl_guest_stack_lo,
+                           (unsigned long)g_xl_guest_stack_hi);
+    }
+    size_t o = 0;
+    bool placed = glen <= 0;
+    const char *line = in;
+    while (*line != '\0') {
+        size_t len = 0;
+        while (line[len] != '\0' && line[len] != '\n') ++len;
+        if (line[len] == '\n') ++len;
+        if (!placed && maps_line_start(line) > g_xl_guest_stack_lo) {
+            memcpy(out + o, guest, (size_t)glen);
+            o += (size_t)glen;
+            placed = true;
+        }
+        if (o + len >= sizeof(out) - (size_t)sizeof(guest)) break;
+        memcpy(out + o, line, len);
+        /* The host's own stack is not the guest's [stack]. */
+        if (glen > 0 && len > 8u && memcmp(out + o + len - 8u, "[stack]\n", 8u) == 0) {
+            memcpy(out + o + len - 8u, "[xlstk]\n", 8u);
+        }
+        o += len;
+        line += len;
+    }
+    if (!placed) {
+        memcpy(out + o, guest, (size_t)glen);
+        o += (size_t)glen;
+    }
+
+    long mfd = host_memfd_create("maps", 1u /* MFD_CLOEXEC */);
+    if (mfd < 0) {
+        return mfd;
+    }
+    for (size_t w = 0; w < o;) {
+        long r = host_write((int)mfd, out + w, o - w);
+        if (r <= 0) {
+            (void)host_close((int)mfd);
+            return r < 0 ? r : -XL_EIO;
+        }
+        w += (size_t)r;
+    }
+    (void)host_lseek((int)mfd, 0, 0 /* SEEK_SET */);
+    return mfd;
+}
+
 static long readlink_exe(uint64_t buf, uint64_t size)
 {
     size_t n = strlen(g_xl_exe_path);
@@ -297,6 +413,16 @@ static long sys_inner(gthread_t *t, long nr, uint64_t a[6])
             a[1] = (uint64_t)(uintptr_t)g_xl_exe_path;
         }
         xl_signal_before_exec();
+        break;
+    case C_open:
+        if (is_proc_self_maps(a[0])) {
+            return open_proc_maps();
+        }
+        break;
+    case C_openat:
+        if (is_proc_self_maps(a[1])) {
+            return open_proc_maps();
+        }
         break;
     case C_readlink:
         if (is_proc_self_exe(a[0])) {

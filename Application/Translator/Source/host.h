@@ -49,6 +49,8 @@ extern const char host_sigreturn[];   /* SA_RESTORER for our handlers */
 
 /* include/uapi/asm-generic/unistd.h */
 #define HNR_openat        56
+#define HNR_lseek         62
+#define HNR_memfd_create  279
 #define HNR_close         57
 #define HNR_read          63
 #define HNR_write         64
@@ -116,6 +118,8 @@ static inline void host_uc_redirect(void *uc, uint64_t fn, uint64_t arg)
 
 /* arch/x86/entry/syscalls/syscall_64.tbl */
 #define HNR_read          0
+#define HNR_lseek         8
+#define HNR_memfd_create  319
 #define HNR_write         1
 #define HNR_close         3
 #define HNR_mmap          9
@@ -197,6 +201,21 @@ static inline long host_pread(int fd, void *buf, size_t n, uint64_t off)
 static inline long host_openat(int dfd, const char *path, int flags, int mode)
 {
     return host_syscall6(HNR_openat, dfd, (long)(uintptr_t)path, flags, mode, 0, 0);
+}
+
+static inline long host_read(int fd, void *buf, size_t n)
+{
+    return host_sys(HNR_read, fd, (long)(uintptr_t)buf, (long)n);
+}
+
+static inline long host_lseek(int fd, long off, int whence)
+{
+    return host_sys(HNR_lseek, fd, off, whence);
+}
+
+static inline long host_memfd_create(const char *name, unsigned flags)
+{
+    return host_sys(HNR_memfd_create, (long)(uintptr_t)name, (long)flags, 0);
 }
 
 static inline long host_close(int fd)

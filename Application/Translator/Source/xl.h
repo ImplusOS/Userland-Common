@@ -264,6 +264,8 @@ const char *xl_syscall_name(long nr);
 
 /* The guest program the translator is running (for /proc/self/exe). */
 extern char g_xl_exe_path[512];
+/* The guest's initial stack, which this translator maps (build_stack()). */
+extern uint64_t g_xl_guest_stack_lo, g_xl_guest_stack_hi;
 /* How the translator itself was started (its argv[0]). */
 extern char g_xl_self_path[512];
 /* The environment the translator was started with. */
@@ -355,6 +357,12 @@ void guest_dump(gthread_t *t);
 /* The register state of a new thread or process: the call returns 0 there,
  * on stack `sp` (0: the parent's), with thread pointer `tls` if set_tls. */
 void guest_clone_child(gthread_t *child, uint64_t sp, bool set_tls, uint64_t tls);
+/* fork() from a multi-threaded guest: every translator lock is taken before
+ * the host fork and let go after it, in the parent and in the child (see
+ * xl_sys_clone). acquire != 0 takes them, 0 releases. */
+void guest_fork_locks(int acquire);
+void xl_code_fork_locks(int acquire);
+void xl_signal_fork_locks(int acquire);
 /* Build a signal frame on the guest stack and enter the handler. Returns
  * false if the frame could not be written. */
 bool guest_signal_setup(gthread_t *t, int sig, const xl_siginfo_t *info,

@@ -422,6 +422,12 @@ static int dp_reg(gthread_t *t, a64cpu_t *c, uint32_t w)
 
 static xl_lock_t g_pair_lock;
 
+void guest_fork_locks(int acquire)
+{
+    if (acquire) xl_lock(&g_pair_lock);
+    else xl_unlock(&g_pair_lock);
+}
+
 static bool cas_n(uint64_t a, int n, uint64_t *exp, uint64_t des)
 {
     if ((a & (uint64_t)(n - 1)) != 0u) {

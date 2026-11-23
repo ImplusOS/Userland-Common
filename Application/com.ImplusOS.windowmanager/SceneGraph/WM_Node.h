@@ -9,6 +9,8 @@ int32_t wm_scene_create_window(wm_state_t *state, int32_t owner_pid,
                                const char *title);
 void wm_scene_destroy_window(wm_state_t *state, uint32_t id);
 void wm_scene_destroy_immediate(wm_state_t *state, uint32_t id);
+/* Close every window whose owning process no longer exists. */
+void wm_scene_reap_orphaned_windows(wm_state_t *state);
 bool wm_scene_set_frame(wm_state_t *state, wm_window_t *window, wm_rect_t frame);
 void wm_scene_show(wm_state_t *state, wm_window_t *window);
 void wm_scene_minimize(wm_state_t *state, wm_window_t *window);

@@ -39,6 +39,12 @@
 static xl_ksigaction_t g_actions[XL_NSIG + 1];
 static xl_lock_t g_actions_lock;
 
+void xl_signal_fork_locks(int acquire)
+{
+    if (acquire) xl_lock(&g_actions_lock);
+    else xl_unlock(&g_actions_lock);
+}
+
 static const uint64_t k_unblockable = XL_SIGBIT(XL_SIGKILL) | XL_SIGBIT(XL_SIGSTOP);
 static const uint64_t k_default_ignore = XL_SIGBIT(XL_SIGCHLD) | XL_SIGBIT(XL_SIGCONT) |
                                          XL_SIGBIT(XL_SIGURG) | XL_SIGBIT(XL_SIGWINCH);

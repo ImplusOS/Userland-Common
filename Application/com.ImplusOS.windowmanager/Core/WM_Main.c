@@ -39,6 +39,9 @@ wm_state_t g_wm_state;
 #define WM_DEFERRED_START_DELAY_MS 500u
 #define WM_DEFERRED_STEP_DELAY_MS 50u
 #define WM_FRAME_INTERVAL_MS 16u
+/* How often windows are checked for an owner that has died without closing
+ * them (wm_scene_reap_orphaned_windows). */
+#define WM_OWNER_CHECK_MS 1000u
 
 static const char *const WM_FONT_PATH =
     "/Userland/com.ImplusOS.windowmanager"
@@ -188,6 +191,7 @@ void wm_service_main_loop(void)
 
     uint64_t last_clock_ms = 0u;
     uint64_t last_display_poll_ms = 0u;
+    uint64_t last_owner_check_ms = 0u;
     uint64_t last_pointer_poll_ms = 0u;
     uint64_t pointer_active_until_ms = 0u;
     uint64_t next_deferred_work_ms = get_uptime_ms() + WM_DEFERRED_START_DELAY_MS;
@@ -240,6 +244,10 @@ void wm_service_main_loop(void)
         if (now_ms - last_display_poll_ms >= 250u) {
             last_display_poll_ms = now_ms;
             (void)wm_display_reconfigure_if_needed(&g_wm_state);
+        }
+        if (now_ms - last_owner_check_ms >= WM_OWNER_CHECK_MS) {
+            last_owner_check_ms = now_ms;
+            wm_scene_reap_orphaned_windows(&g_wm_state);
         }
         if (!did_work && now_ms >= next_deferred_work_ms &&
             now_ms >= pointer_active_until_ms &&

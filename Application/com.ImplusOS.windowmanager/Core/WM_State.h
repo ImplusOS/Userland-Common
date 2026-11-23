@@ -135,6 +135,10 @@ typedef struct {
 typedef struct wm_window {
     uint32_t id;
     int32_t owner_pid;
+    /* The owner's process name when the window was made. Pids are reused
+     * quickly here, so a live process under owner_pid is only the owner if
+     * it still has this name (wm_scene_reap_orphaned_windows). */
+    char owner_name[64];
     wm_rect_t frame;
     wm_rect_t restore_frame;
     uint32_t bg_color;

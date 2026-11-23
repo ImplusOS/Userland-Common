@@ -9,26 +9,27 @@
  * FireFox launcher (the same "Method A" X hosting path as Chromium, Doom and
  * the terminal: Docs/Others/TODO_Doom_Xorg_MethodA.md section 10).
  *
- * Resource/firefox is an unmodified upstream Linux Firefox tarball (156.0).
+ * Resource/ is an unmodified upstream Linux Firefox release tarball
+ * (160.0.1, ja; `make -C Userland/Application/FireFox fetch` puts it there).
  * It is an ordinary X11 client, so it reaches the screen the way every other
  * foreign X client here does: Xorg is brought up (or joined, if somebody got
  * there first) and hosted in a WM window by Userland/API/Source/XSession.c,
  * and Firefox is then spawned as a client of that server.
  *
- * THE TWO-PROCESS LAUNCH CHAIN
+ * WHICH BINARY
  *
- * `Resource/firefox` is a 5.5 KiB stub. All it does is readlink
- * /proc/self/exe, append "-bin" to the path and execv() that:
- *
- *     /Userland/FireFox/Resource/firefox  ->  .../firefox-bin
- *
- * so the path below MUST be the stub beside its own firefox-bin -- a path
- * that does not resolve to a directory holding both (the wrong case, or the
- * directory without the Resource/ component) dies with the stub's
- * "Exec failed with error: <strerror>" and never reaches Gecko.
- * firefox-bin in turn finds the rest of the install (omni.ja, libxul.so,
- * defaults/pref) from its own /proc/self/exe, which is why the kernel's
- * "foreign ELF cwd = the executable's directory" rule matters too.
+ * The tarball's `firefox` is a 5.5 KiB stub. All it does is readlink
+ * /proc/self/exe, append "-bin" and execv() that with the same argv, so this
+ * launcher spawns `firefox-bin` itself. The stub is also the one program in
+ * the tarball that is not position-independent: lld linked it at its
+ * default image base 0x200000, a fixed address the arm64 translator cannot
+ * map at all (the arm64 kernel keeps the low identity map for itself, as for
+ * any x86_64 ET_EXEC there), and the x86_64 kernel only since it reserves
+ * that range at boot (PAGING_LOW_ET_EXEC_* in Arch/x86_64/mmu/Paging_Main.h).
+ * firefox-bin is a PIE and finds the rest of the install (omni.ja,
+ * libxul.so, defaults/pref) from its own /proc/self/exe, which is why the
+ * kernel's "foreign ELF cwd = the executable's directory" rule matters too.
+ * Its program profile is Environment/firefox-bin.env.
  *
  * THE LIBRARY PATH
  *
@@ -52,7 +53,7 @@
  * on whitespace into argv[1..] (no quoting -- see LINUX_ARGV_MAX in
  * ProcessManager_Create.c), so every flag below has to survive that split.
  */
-#define FIREFOX_PATH "/Userland/FireFox/Resource/firefox"
+#define FIREFOX_PATH "/Userland/FireFox/Resource/firefox-bin"
 
 /* The page FireFox opens at start. */
 #define FIREFOX_START_URL "https://www.google.com/"
@@ -68,7 +69,7 @@
 
 /* Firefox has no equivalent of Chromium's --window-position/--window-size
  * (there is no window manager in the X instance XSession starts to ask, and
- * -width/-geometry are not options of the current stub), so the window comes
+ * -width/-geometry are not options of current Firefox), so the window comes
  * up wherever Gecko puts it on a fresh profile. Nothing to pass here by
  * default; it stays empty unless a launcher wants a first flag. */
 /* Optional: when this file exists its contents (switches and/or URLs,

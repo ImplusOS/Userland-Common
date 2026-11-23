@@ -34,7 +34,8 @@ Source/
   thread.c           run loop, fault recovery, clone/fork, thread exit
   signal.c           guest dispositions and masks, host handler, delivery
   syscall.c          canonical (x86_64-numbered) layer: what the translator
-                     handles itself (signals, clone, exit, /proc/self/exe, ...)
+                     handles itself (signals, clone, exit, /proc/self/exe,
+                     /proc/self/maps with the guest stack added, ...)
   hostsys_generic.c  canonical -> asm-generic host (arm64)
   hostsys_x86_64.c   canonical -> x86_64 host (identity)
   host.h, host_*.S   host syscall numbers, traps, clone, setjmp, ucontext

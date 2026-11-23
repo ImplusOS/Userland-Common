@@ -24,10 +24,32 @@ LDFLAGS := -T ../../Source/Userland.ld -e _start -nostdlib --build-id=none
 RESOURCE_DIR := Resource
 JP_FONT_SRC := ../../../BootManager/Source/Resource/Fonts/NotoSansJP-Regular.ttf
 
-# Resource/chrome is an unmodified upstream Chromium binary (~500 MiB,
-# ELFOSABI_LINUX): not built here, only staged. Not committed to git (see
-# .gitignore) -- placed by hand, same as Doom/Resource/linuxxdoom-x86_64.
+# Resource/ is the unmodified upstream Linux Firefox release (x86_64; on
+# arm64 it runs under the translator): not built here, only staged. Not
+# committed to git (see .gitignore). `make fetch` downloads the pinned
+# release below from Mozilla, checks its sha256 and unpacks it into
+# Resource/ -- the only step that needs the network; `all` never fetches.
+FIREFOX_VERSION ?= 160.0.1
+FIREFOX_LOCALE  ?= ja
+FIREFOX_SHA256  ?= 23ada07d9e9b3d7f1b37915814b2368aaaf1d9f5a9bd5a5c2c3ba51f1cc821d7
+FIREFOX_TARBALL := firefox-$(FIREFOX_VERSION).tar.xz
+FIREFOX_URL     := https://download-installer.cdn.mozilla.net/pub/firefox/releases/$(FIREFOX_VERSION)/linux-x86_64/$(FIREFOX_LOCALE)/$(FIREFOX_TARBALL)
+
 all: $(ELF) copy_resources
+
+.PHONY: fetch
+fetch:
+	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	echo "fetch: $(FIREFOX_URL)"; \
+	curl -fL --retry 3 -o "$$tmp/$(FIREFOX_TARBALL)" "$(FIREFOX_URL)"; \
+	got=$$(shasum -a 256 "$$tmp/$(FIREFOX_TARBALL)" 2>/dev/null || sha256sum "$$tmp/$(FIREFOX_TARBALL)"); \
+	got=$${got%% *}; \
+	if [ "$$got" != "$(FIREFOX_SHA256)" ]; then \
+		echo "fetch: sha256 mismatch: $$got" >&2; exit 1; \
+	fi; \
+	mkdir -p "$$tmp/x"; tar -xJf "$$tmp/$(FIREFOX_TARBALL)" -C "$$tmp/x"; \
+	rm -rf $(RESOURCE_DIR); mv "$$tmp/x/firefox" $(RESOURCE_DIR); \
+	echo "fetch: Firefox $(FIREFOX_VERSION) ($(FIREFOX_LOCALE)) -> $(RESOURCE_DIR)/"
 
 copy_resources:
 	@if [ -d $(RESOURCE_DIR) ]; then \

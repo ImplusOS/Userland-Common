@@ -262,6 +262,13 @@ int32_t wm_scene_create_window(wm_state_t *state, int32_t owner_pid,
     memset(window, 0, sizeof(*window));
     window->id = id;
     window->owner_pid = owner_pid;
+    {
+        process_info_t owner;
+        if (get_process_info(owner_pid, &owner) >= 0 && owner.pid == owner_pid) {
+            memcpy(window->owner_name, owner.name, sizeof(window->owner_name));
+            window->owner_name[sizeof(window->owner_name) - 1u] = '\0';
+        }
+    }
     window->frame = frame;
     window->restore_frame = frame;
     window->bg_color = background | 0xFF000000u;
@@ -338,6 +345,38 @@ void wm_scene_destroy_immediate(wm_state_t *state, uint32_t id)
         if (!has_other) {
             process_kill(owner_pid);
         }
+    }
+}
+
+/* A window outlives its owner when the owner dies without destroying it --
+ * killed, or crashed. Such a window can never be closed again: its close
+ * button goes to the owner (WM_CLOSE_REQUESTED, for a launcher that hosts
+ * another program) and nobody is there to answer. Close it ourselves. The
+ * owner pid is cleared first, so the close neither messages nor kills a
+ * process that has since been given the same pid. */
+void wm_scene_reap_orphaned_windows(wm_state_t *state)
+{
+    if (!state) return;
+    int32_t self = process_get_current_pid();
+    for (uint32_t i = 1u; i <= WM_MAX_WINDOWS; ++i) {
+        wm_window_t *window = state->scene.id_table[i];
+        if (!window || window->owner_pid <= 0 || window->owner_pid == self ||
+            window->close_requested) {
+            continue;
+        }
+        process_info_t owner;
+        bool gone = get_process_info(window->owner_pid, &owner) < 0 ||
+                    owner.pid != window->owner_pid ||
+                    owner.state == 0u /* unused */ ||
+                    owner.state == 3u /* dead */ ||
+                    owner.state == 5u /* zombie */ ||
+                    (window->owner_name[0] != '\0' &&
+                     strncmp(owner.name, window->owner_name,
+                             sizeof(window->owner_name)) != 0);
+        if (!gone) continue;
+        window->owner_pid = 0;
+        window->owner_handles_close = false;
+        wm_scene_destroy_window(state, window->id);
     }
 }
 

@@ -19,6 +19,7 @@
 #include "host.h"
 
 char g_xl_exe_path[512];
+uint64_t g_xl_guest_stack_lo, g_xl_guest_stack_hi;
 char g_xl_self_path[512];
 char **g_xl_envp;
 uint64_t g_xl_prog_base;
@@ -328,6 +329,8 @@ static uint64_t build_stack(int gargc, char **gargv, char **envp,
     if (m < 0 && m > -4096) {
         xl_fatal("cannot allocate the guest stack");
     }
+    g_xl_guest_stack_lo = (uint64_t)m;
+    g_xl_guest_stack_hi = (uint64_t)m + GUEST_STACK_SIZE;
     stack_builder_t b = { (uint64_t)m + GUEST_STACK_SIZE, (uint64_t)m + GUEST_STACK_SIZE };
 
     uint8_t rnd[16];

@@ -247,6 +247,12 @@ static inline int stack_sz(insn_t *i)
 
 static xl_lock_t g_misaligned_atomic;
 
+void guest_fork_locks(int acquire)
+{
+    if (acquire) xl_lock(&g_misaligned_atomic);
+    else xl_unlock(&g_misaligned_atomic);
+}
+
 static bool cas(uint64_t addr, int sz, uint64_t *expected, uint64_t desired)
 {
     if ((addr & (uint64_t)(sz - 1)) == 0u) {
