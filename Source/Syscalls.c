@@ -1709,6 +1709,8 @@ void *kvm_mmap(int32_t fd, uint64_t offset, uint64_t size)
 #define SYSCALL_RAW_BLOCK_WRITE   218ULL
 #define SYSCALL_GET_BOOT_FONT     219ULL
 #define SYSCALL_GET_CPU_USAGE     235ULL
+#define SYSCALL_GET_DISK_STATS    279ULL
+#define SYSCALL_GET_GPU_USAGE     280ULL
 
 int64_t os_get_cpu_info(system_cpu_info_t *out_info)
 {
@@ -1756,6 +1758,23 @@ int64_t os_get_disk_info(uint32_t index, system_disk_info_t *out_info)
         return -22;
     }
     return syscall2(SYSCALL_GET_DISK_INFO, (uint64_t)index, (uint64_t)(uintptr_t)out_info);
+}
+
+int64_t os_get_disk_stats(uint32_t index, system_disk_stats_t *out_stats)
+{
+    if (out_stats == NULL) {
+        return -22;
+    }
+    return syscall2(SYSCALL_GET_DISK_STATS, (uint64_t)index,
+                    (uint64_t)(uintptr_t)out_stats);
+}
+
+int64_t os_get_gpu_usage(system_gpu_usage_t *out_usage)
+{
+    if (out_usage == NULL) {
+        return -22;
+    }
+    return syscall1(SYSCALL_GET_GPU_USAGE, (uint64_t)(uintptr_t)out_usage);
 }
 
 int64_t os_raw_block_read(uint32_t disk_index, uint64_t lba, void *buffer, uint32_t sectors)

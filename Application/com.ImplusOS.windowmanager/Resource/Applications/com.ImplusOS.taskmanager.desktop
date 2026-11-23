@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Task Manager
+Name[ja]=タスク マネージャー
+Comment=Processes, CPU, memory, disk and GPU usage, and boot timings
+Comment[ja]=プロセスと CPU・メモリ・ディスク・GPU の使用率、起動時間を確認する
+Exec=/Userland/com.ImplusOS.taskmanager/com.ImplusOS.taskmanager.ELF
+Icon=utilities-system-monitor
+Categories=System;Monitor;
